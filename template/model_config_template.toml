@@ -19,13 +19,6 @@ max_retry = 3
 timeout = 15
 retry_interval = 5
 
-[[models]] # 模型（可以配置多个）
-model_identifier = "deepseek-chat" # 模型标识符（API服务商提供的模型标识符）
-name = "deepseek-v3"               # 模型名称（可随意命名，在后面中需使用这个命名）
-api_provider = "DeepSeek"          # API服务商名称（对应在api_providers中配置的服务商名称）
-price_in = 2.0                     # 输入价格（用于API调用统计，单位：元/ M token）（可选，若无该字段，默认值为0）
-price_out = 8.0                    # 输出价格（用于API调用统计，单位：元/ M token）（可选，若无该字段，默认值为0）
-
 [[models]]
 model_identifier = "deepseek-ai/DeepSeek-V3.2-Exp"
 name = "deepseek-ai/DeepSeek-V3.2-Exp"
