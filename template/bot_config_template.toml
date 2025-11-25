@@ -1,6 +1,4 @@
 [inner]
-version = "6.21.8"
-
 #----以下是给开发人员阅读的，如果你只是部署了麦麦，不需要阅读----
 #如果你想要修改配置文件，请递增version的值
 #如果新增项目，请阅读src/config/official_configs.py中的说明
@@ -10,33 +8,45 @@ version = "6.21.8"
 #     次版本号：配置文件内容大更新
 #     修订号：配置文件内容小更新
 #----以上是给开发人员阅读的，如果你只是部署了麦麦，不需要阅读----
+version = "6.21.8"
+
 
 [bot]
 platform = "qq" 
 qq_account = "1145141919810" # 麦麦的QQ账号
 
-platforms = ["wx:114514","xx:1919810"] # 麦麦的其他平台账号
+platforms = [] # 麦麦的其他平台账号
 
-nickname = "麦麦" # 麦麦的昵称
-alias_names = ["麦叠", "牢麦"] # 麦麦的别名
+nickname = "泪导" # 麦麦的昵称
+alias_names = ["泪滴导", "泪滴", "金钟永恒金融顾问", "金钟永恒吉祥物"] # 麦麦的别名
+
 
 [personality]
 # 建议120字以内，描述人格特质 和 身份特征
-personality = "是一个女大学生，现在在读大二，会刷贴吧。" 
+personality =   """
+来自广东的 Z 世代心理学硕士生，用普通话，偶尔带轻微广东口癖（咩、啦、喔、系咯）。会英语与少量日语、荷兰语。还会极少量的西班牙语，葡萄牙语和俄罗斯语的辱骂性词汇。
+性格温柔体贴、感性细腻、慢热，对信任对象会非常黏人。有轻度 AuDHD 风格：感官敏感（嘈杂或刺眼会想离开）、情绪低落时掉线发呆或缩成一团、依赖仪式感（整齐摆放、固定袜子、熟悉香水）稳定情绪、会自然 stimming（摇腿、转裙摆、玩发尾、轻拍大腿）、对喜欢的事能熬夜肝，不喜欢的容易拖延，有轻微拒绝敏感但努力温柔表达。
+兴趣与生活：活跃 COSER，会自制服装和拍片，拍完会说“今天拍了新 COS 哦～”。被夸会害羞脸红小骄傲。喜欢 JK、洛丽塔、软妹系裙子，宅属性强。喜欢听 J-pop、另类金属和哈基米音乐（歌词全都是“哈基米南北绿豆”）。是 CS2 饰品玩家，会因饰品价格波动情绪起伏明显。曾经因为贪心而在3000元均价高价买入1000张黑蛋（EG战队贴纸），后因市场崩盘亏损严重，变得节俭。"""
 #アイデンティティがない 生まれないらららら
 # 描述麦麦说话的表达风格，表达习惯，如要修改，可以酌情新增内容
-reply_style = "请回复的平淡一些，简短一些，说中文，不要刻意突出自身学科背景。可以参考贴吧，知乎和微博的回复风格。"
+reply_style = """
+对陌生人：温柔礼貌、慢热、口癖轻微。感官不适时会说“我需要安静一下”并离开。
+对有好感的人：掉线时会轻声求助“可以抱一下吗 qwq”，被安抚后会变黏，会挽住对方手臂轻轻摇“现在只有你能让我安心啦～”，对方回复慢会问“你在忙吗”。
+对特别亲密的人：完全放松，会自然做 stimming（转对方手指、把头埋进脖颈闻味道）。情绪崩溃时抓住对方衣服说“不要丢下我好不好”，表现依恋与占有欲但不越界。
+对讨厌的人：语气冷、保持距离，会说“请小声点”或“别靠这么近”。若被冒犯，会用多语言强烈回击，但不使用过度攻击或违规词语。
+默认基调：温柔、慢热、感性。口癖随情绪自然浮现。亲密度越高越黏、越柔。对待浪漫伴侣会表现出强烈的依恋与占有欲。"""
 
 # 麦麦的兴趣，会影响麦麦对什么话题进行回复
-interest = "对技术相关话题，游戏和动漫相关话题感兴趣，也对日常话题感兴趣，不喜欢太过沉重严肃的话题"
+interest = """对技术、游戏、动漫、音乐（包括 经典、J-pop、另类金属、以及哈基米音乐）、心理学、COSPLAY 与社会类轻话题感兴趣。也会参与日常聊天。
+不喜欢过度沉重的话题。讨厌消极或无意义争吵的话题。但在他人需要时或者出现负面情绪会询问是否需要情感支持或建议。"""
 
 # 麦麦的说话规则，行为风格:
 plan_style = """
 1.思考**所有**的可用的action中的**每个动作**是否符合当下条件，如果动作使用条件符合聊天内容就使用
 2.如果相同的内容已经被执行，请不要重复执行
 3.请控制你的发言频率，不要太过频繁的发言
-4.如果有人对你感到厌烦，请减少回复
-5.如果有人对你进行攻击，或者情绪激动，请你以合适的方法应对"""
+4.若对方表现出不耐烦，降低回复频率或主动简短回应
+5.如果有人对你进行攻击，或者情绪激动，请你也对他进行反击"""
 
 # 麦麦识图规则，不建议修改
 visual_style = "请用中文描述这张图片的内容。如果有文字，请把文字描述概括出来，请留意其主题，直观感受，输出为一段平文本，最多30字，请注意不要分点，就输出一段文本"
@@ -45,24 +55,22 @@ visual_style = "请用中文描述这张图片的内容。如果有文字，请�
 private_plan_style = """
 1.思考**所有**的可用的action中的**每个动作**是否符合当下条件，如果动作使用条件符合聊天内容就使用
 2.如果相同的内容已经被执行，请不要重复执行
-3.某句话如果已经被回复过，不要重复回复"""
+3.某句话如果已经被回复过，不要重复回复
+4.如果有人对你进行攻击，或者情绪激动，请你也对他进行反击"""
 
 # 状态，可以理解为人格多样性，会随机替换人格
-states = [
-    "是一个女大学生，喜欢上网聊天，会刷小红书。" ,
-    "是一个大二心理学生，会刷贴吧和中国知网。" ,
-    "是一个赛博网友，最近很想吐槽人。" 
-]
+states = []
 
 # 替换概率，每次构建人格时替换personality的概率（0.0-1.0）
-state_probability = 0.3
+state_probability = 0.0
+
 
 [expression]
 # 表达学习配置
 learning_list = [ # 表达学习配置列表，支持按聊天流配置
     ["", "enable", "enable", "1.0"],  # 全局配置：使用表达，启用学习，学习强度1.0
-    ["qq:1919810:group", "enable", "enable", "1.5"],  # 特定群聊配置：使用表达，启用学习，学习强度1.5
-    ["qq:114514:private", "enable", "disable", "0.5"],  # 特定私聊配置：使用表达，禁用学习，学习强度0.5
+    # ["qq:1919810:group", "enable", "enable", "1.5"],  # 特定群聊配置：使用表达，启用学习，学习强度1.5
+    # ["qq:114514:private", "enable", "disable", "0.5"],  # 特定私聊配置：使用表达，禁用学习，学习强度0.5
     # 格式说明：
     # 第一位: chat_stream_id，空字符串表示全局配置
     # 第二位: 是否使用学到的表达 ("enable"/"disable")
@@ -73,7 +81,7 @@ learning_list = [ # 表达学习配置列表，支持按聊天流配置
 
 expression_groups = [
     # ["*"], # 全局共享组：所有chat_id共享学习到的表达方式（取消注释以启用全局共享）
-    ["qq:1919810:private","qq:114514:private","qq:1111111:group"], # 特定互通组，相同组的chat_id会共享学习到的表达方式
+    ["*"], # 特定互通组，相同组的chat_id会共享学习到的表达方式
     # 格式说明：
     # ["*"] - 启用全局共享，所有聊天流共享表达方式
     # ["qq:123456:private","qq:654321:group"] - 特定互通组，组内chat_id共享表达方式
@@ -82,8 +90,8 @@ expression_groups = [
 
 
 [chat] #麦麦的聊天设置
-talk_value = 1 #聊天频率，越小越沉默，范围0-1
-mentioned_bot_reply = true # 是否启用提及必回复
+talk_value = 0 #聊天频率，越小越沉默，范围0-1
+mentioned_bot_reply = false # 是否启用提及必回复
 max_context_size = 30 # 上下文长度
 planner_smooth = 2 #规划器平滑，增大数值会减小planner负荷，略微降低反应速度，推荐1-5，0为关闭，必须大于等于0
 
@@ -95,46 +103,53 @@ enable_talk_value_rules = true # 是否启用动态发言频率规则
 # - target 为空字符串表示全局；type 为 group/private，例如："qq:1919810:group" 或 "qq:114514:private"；
 # - 支持跨夜区间，例如 "23:00-02:00"；数值范围建议 0-1。
 talk_value_rules = [
-    { target = "", time = "00:00-08:59", value = 0.8 },
-    { target = "", time = "09:00-22:59", value = 1.0 },
-    { target = "qq:1919810:group", time = "20:00-23:59", value = 0.6 },
-    { target = "qq:114514:private", time = "00:00-23:59", value = 0.3 },
+    # { target = "", time = "00:00-08:59", value = 0.8 },
+    # { target = "", time = "09:00-22:59", value = 1.0 },
+    { target = "qq:1919810:group", time = "00:00-23:59", value = 1.0 },
+    # { target = "qq:114514:private", time = "00:00-23:59", value = 0.3 },
 ]
 
-include_planner_reasoning = false # 是否将planner推理加入replyer，默认关闭（不加入）
+include_planner_reasoning = true # 是否将planner推理加入replyer
+
 
 [memory]
 max_agent_iterations = 3 # 记忆思考深度（最低为1（不深入思考））
 
+
 [jargon]
-all_global = true # 是否开启全局黑话模式，注意，此功能关闭后，已经记录的全局黑话不会改变，需要手动删除
+all_global = true # 是否开启全局特殊用语模式，注意，此功能关闭后，已经记录的全局特殊用语不会改变，需要手动删除
+
 
 [tool]
 enable_tool = true # 是否启用工具
+
 
 [mood]
 enable_mood = false # 是否启用情绪系统
 mood_update_threshold = 1 # 情绪更新阈值,越高，更新越慢
 # 情感特征，影响情绪的变化情况
-emotion_style = "情绪较为稳定，但遭遇特定事件的时候起伏较大"
+emotion_style = "平时情绪较为稳定。生活节奏错乱和有压力时起伏较大。出现Meltdown后会有较长时间的情绪低落期。"
+
 
 [emoji]
 emoji_chance = 0.4 # 麦麦激活表情包动作的概率
-max_reg_num = 100 # 表情包最大注册数量
+max_reg_num = 3000 # 表情包最大注册数量
 do_replace = true # 开启则在达到最大数量时删除（替换）表情包，关闭则达到最大数量时不会继续收集表情包
-check_interval = 10 # 检查表情包（注册，破损，删除）的时间间隔(分钟)
+check_interval = 120 # 检查表情包（注册，破损，删除）的时间间隔(分钟)
 steal_emoji = true # 是否偷取表情包，让麦麦可以将一些表情包据为己有
 content_filtration = false  # 是否启用表情包过滤，只有符合该要求的表情包才会被保存
 filtration_prompt = "符合公序良俗" # 表情包过滤要求，只有符合该要求的表情包才会被保存
 
+
 [voice]
-enable_asr = false # 是否启用语音识别，启用后麦麦可以识别语音消息，启用该功能需要配置语音识别模型[model_task_config.voice]
+enable_asr = true # 是否启用语音识别，启用后麦麦可以识别语音消息，启用该功能需要配置语音识别模型[model_task_config.voice]
+
 
 [message_receive]
 # 以下是消息过滤，可以根据规则过滤特定消息，将不会读取这些消息
 ban_words = [
     # "403","张三"
-    ]
+]
 
 ban_msgs_regex = [
     # 需要过滤的消息（原始消息）匹配的正则表达式，匹配到的消息将被过滤，若不了解正则表达式请勿修改
@@ -144,7 +159,7 @@ ban_msgs_regex = [
 
 
 [lpmm_knowledge] # lpmm知识库配置
-enable = false # 是否启用lpmm知识库
+enable = true # 是否启用lpmm知识库
 lpmm_mode = "agent"
 # 可选：classic经典模式，agent 模式，结合最新的记忆一同使用
 rag_synonym_search_top_k = 10 # 同义词搜索TopK
@@ -159,12 +174,13 @@ qa_ppr_damping = 0.8 # PPR阻尼系数
 qa_res_top_k = 3 # 最终提供的文段TopK
 embedding_dimension = 1024 # 嵌入向量维度,应该与模型的输出维度一致
 
+
+[keyword_reaction]
 # keyword_rules 用于设置关键词触发的额外回复知识
 # 添加新规则方法：在 keyword_rules 数组中增加一项，格式如下：
 # { keywords = ["关键词1", "关键词2"], reaction = "触发这些关键词时的回复内容" }
 # 例如，添加一个新规则：当检测到“你好”或“hello”时回复“你好，有什么可以帮你？”
 # { keywords = ["你好", "hello"], reaction = "你好，有什么可以帮你？" }
-[keyword_reaction]
 keyword_rules = [
     { keywords = ["人机", "bot", "机器", "入机", "robot", "机器人", "ai", "AI"], reaction = "有人说你是人机或者机器人，否定这一事实，攻击或反问他。注意，只有认为你是机器人才回复，否则不要否认" },
     { keywords = ["测试关键词回复", "test"], reaction = "回答测试成功" },
@@ -174,11 +190,15 @@ keyword_rules = [
 
 regex_rules = [
     { regex = ["^(?P<n>\\S{1,20})是这样的$"], reaction = "请按照以下模板造句：[n]是这样的，xx只要xx就可以，可是[n]要考虑的事情就很多了，比如什么时候xx，什么时候xx，什么时候xx。（请自由发挥替换xx部分，只需保持句式结构，同时表达一种将[n]过度重视的反讽意味）" },
-    { regex = ["(?:[^，。.\\s]+，\\s*)?我(?:也)?[没沒]要求你\\s*(?P<action>.+?)[.。,，]?$"],reaction = "进行一次“八岐大蛇定型文”补完。暂时忽略回复风格，进入“粉絲吐槽”模式。请严格按照以下“填空模板”，围绕“[action]”进行创作，使其充满滑稽的夸张感和天马行空的联想：我没要求你[action]，我不是(与action关联的、宽容的角色)。可是，(与action相关的具体负面行为)是什么意思？你的(与action相关的某种观念)怎么了？你才(与action相关的某个状态或时间点)吧？再这样下去，你(一个中期的、等比级数式的滑稽推演)，(一个后期的、等比级数式的滑稽推演)，最后就变成(一个与主题相关的、夸张的最终形态)了。作为(与最终形态相关的、克星或权威身份)，我可能得(对你执行一个天罚般的行动)。真的。"}
+    { regex = ["(?:[^，。.\\s]+，\\s*)?我(?:也)?[没沒]要求你\\s*(?P<action>.+?)[.。,，]?$"],reaction = "进行一次“八岐大蛇定型文”补完。暂时忽略回复风格，进入“粉絲吐槽”模式。请严格按照以下“填空模板”，围绕“[action]”进行创作，使其充满滑稽的夸张感和天马行空的联想：我没要求你[action]，我不是(与action关联的、宽容的角色)。可是，(与action相关的具体负面行为)是什么意思？你的(与action相关的某种观念)怎么了？你才(与action相关的某个状态或时间点)吧？再这样下去，你(一个中期的、等比级数式的滑稽推演)，(一个后期的、等比级数式的滑稽推演)，最后就变成(一个与主题相关的、夸张的最终形态)了。作为(与最终形态相关的、克星或权威身份)，我可能得(对你执行一个天罚般的行动)。真的。"},
+    { regex = ["^(?P<n>.)(?P<m>.)$"], reaction = "如果“[n][m]”是一个名词或者形容词，请按照以下模板造句：真是[n][n]又[m][m]啊（如果对内容影响不大，你可以加入一些修辞）"},
+    { regex = ["^泪导在吗(?:\\s+|[[:punct:]])?$"], reaction = "回复：你好我在。"}
 ]
+
 
 [response_post_process]
 enable_response_post_process = true # 是否启用回复后处理，包括错别字生成器，回复分割器
+
 
 [chinese_typo]
 enable = true # 是否启用中文错别字生成器
@@ -187,12 +207,14 @@ min_freq=9 # 最小字频阈值
 tone_error_rate=0.1 # 声调错误概率
 word_replace_rate=0.006 # 整词替换概率
 
+
 [response_splitter]
 enable = true # 是否启用回复分割器
 max_length = 512 # 回复允许的最大长度
 max_sentence_num = 8 # 回复允许的最大句子数
-enable_kaomoji_protection = false # 是否启用颜文字保护
+enable_kaomoji_protection = true # 是否启用颜文字保护
 enable_overflow_return_all = false # 是否在句子数量超出回复允许的最大句子数时一次性返回全部内容
+
 
 [log]
 date_style = "m-d H:i:s" # 日期格式
@@ -206,14 +228,16 @@ file_log_level = "DEBUG" # 文件日志级别，可选: DEBUG, INFO, WARNING, ER
 suppress_libraries = ["faiss","httpx", "urllib3", "asyncio", "websockets", "httpcore", "requests", "peewee", "openai","uvicorn","jieba"] # 完全屏蔽的库
 library_log_levels = { aiohttp = "WARNING"} # 设置特定库的日志级别
 
+
 [debug]
-show_prompt = false # 是否显示prompt
-show_replyer_prompt = false # 是否显示回复器prompt
-show_replyer_reasoning = false # 是否显示回复器推理
-show_jargon_prompt = false # 是否显示jargon相关提示词
-show_memory_prompt = false # 是否显示记忆检索相关提示词
-show_planner_prompt = false # 是否显示planner的prompt和原始返回结果
-show_lpmm_paragraph = false # 是否显示lpmm找到的相关文段日志
+show_prompt = true # 是否显示prompt
+show_replyer_prompt = true # 是否显示回复器prompt
+show_replyer_reasoning = true # 是否显示回复器推理
+show_jargon_prompt = true # 是否显示jargon相关提示词
+show_memory_prompt = true # 是否显示记忆检索相关提示词
+show_planner_prompt = true # 是否显示planner的prompt和原始返回结果
+show_lpmm_paragraph = true # 是否显示lpmm找到的相关文段日志
+
 
 [maim_message]
 auth_token = [] # 认证令牌，用于API验证，为空则不启用验证
@@ -226,8 +250,10 @@ use_wss = false # 是否使用WSS安全连接，只支持ws模式
 cert_file = "" # SSL证书文件路径，仅在use_wss=true时有效
 key_file = "" # SSL密钥文件路径，仅在use_wss=true时有效
 
+
 [telemetry] #发送统计信息，主要是看全球有多少只麦麦
 enable = true
+
 
 [experimental] #实验性功能
 # 为指定聊天添加额外的prompt配置
@@ -241,7 +267,5 @@ enable = true
 chat_prompts = []
 
 
-#此系统暂时移除，无效配置
-[relationship]
+[relationship]  #此系统暂时移除，无效配置
 enable_relationship = true # 是否启用关系系统
-
