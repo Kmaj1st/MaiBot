@@ -544,7 +544,7 @@ class EmojiConfig(ConfigBase):
     content_filtration: bool = False
     """是否开启表情包过滤"""
 
-    filtration_prompt: str = "符合公序良俗"
+    filtration_prompt: str = ""
     """表情包过滤要求"""
 
 

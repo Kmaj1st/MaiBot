@@ -292,10 +292,6 @@ class ChatBot:
 
             message.update_chat_stream(chat)
 
-            # if await self.check_ban_content(message):
-            #     logger.warning(f"检测到消息中含有违法，色情，暴力，反动，敏感内容，消息内容：{message.processed_plain_text}，发送者：{message.message_info.user_info.user_nickname}")
-            #     return
-
             # 命令处理 - 使用新插件系统检查并处理命令
             is_command, cmd_result, continue_process = await self._process_commands(message)
 
