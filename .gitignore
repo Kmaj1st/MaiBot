@@ -1,4 +1,19 @@
 data/
+# Local roleplay benchmark data
+tools/roleplay_benchmark/
+tools/roleplay_benchmark/data/agent_scores.json
+tools/roleplay_benchmark/data/benchmark_split.json
+tools/roleplay_benchmark/data/discarded_samples.json
+tools/roleplay_benchmark/data/human_scores.json
+tools/roleplay_benchmark/data/sample_cache.json
+tools/roleplay_benchmark/data/agent_prompts/
+tools/roleplay_benchmark/data/server.*.log
+!pytests/A_memorix_test/data/
+!pytests/A_memorix_test/data/benchmarks/
+!pytests/A_memorix_test/data/benchmarks/long_novel_memory_benchmark.json
+!pytests/A_memorix_test/data/real_dialogues/
+!pytests/A_memorix_test/data/real_dialogues/private_alice_weekend.json
+pytests/A_memorix_test/data/benchmarks/results/
 data1/
 mongodb/
 NapCat.Framework.Windows.Once/
@@ -6,6 +21,7 @@ NapCat.Framework.Windows.OneKey/
 log/
 logs/
 out/
+SnowLuma-v1.6.10-win-x64/
 tool_call_benchmark.py
 run_maibot_core.bat
 run_voice.bat
@@ -21,7 +37,6 @@ nonebot-maibot-adapter/
 MaiMBot-LPMM
 *.zip
 run_bot.bat
-run_na.bat
 run_all_in_wt.bat
 run.bat
 log_debug/
@@ -29,25 +44,47 @@ NapCat.Shell.Windows.OneKey
 run_amds.bat
 run_none.bat
 docs-mai/
+plugin_repo/
 run.py
-message_queue_content.txt
-message_queue_content.bat
-message_queue_window.bat
-message_queue_window.txt
 queue_update.txt
+start_saka.bat
 .env
 .env.*
 .cursor
+start_all.bat
 config/bot_config_dev.toml
 config/bot_config.toml
 config/bot_config.toml.bak
-config/lpmm_config.toml
-config/lpmm_config.toml.bak
 template/compare/bot_config_template.toml
 template/compare/model_config_template.toml
-CLAUDE.md
-MaiBot-Dashboard/
+# CLAUDE.md
 cloudflare-workers/
+log_viewer/
+dev/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Custom MaiBot config for Docker Deployments
+docker-config/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 result.json
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -69,12 +106,17 @@ develop-eggs/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
 var/
 wheels/
+
+# Dev container config
+.devcontainer/devcontainer-lock.json
+# DooD 自动生成的 compose override，包含宿主机绝对路径，不可提交；仅在 devcontainer 内通过 COMPOSE_FILE 加载
+docker-compose.devcontainer.yml
+
 share/python-wheels/
 *.egg-info/
 .installed.cfg
@@ -183,7 +225,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.venv
+.venv/
 env/
 venv/
 ENV/
@@ -251,10 +293,14 @@ OtherRes.txt
 logs
 
 .ruff_cache
+.codex-runtime/
+unsloth_compiled_cache/
 
 .vscode
 
 /config/*
+config/mcp_config.json
+!config/mcp_config.json.template
 config/old/bot_config_20250405_212257.toml
 temp/
 
@@ -319,15 +365,22 @@ run_pet.bat
 !/plugins
 !/plugins/hello_world_plugin
 !/plugins/emoji_manage_plugin
-!/plugins/take_picture_plugin
-!/plugins/deep_think
-!/plugins/MaiBot_MCPBridgePlugin
-!/plugins/ChatFrequency/
 !/plugins/__init__.py
 
 config.toml
 
 interested_rates.txt
 MaiBot.code-workspace
-*.lock
 actionlint
+.sisyphus/
+dist-electron/
+packages/
+
+## Claude Code and OMC data
+.claude/
+.omc/
+/.venv312
+/src/A_memorix/algorithm_redesign
+agentlite/
+/qwen_mai/
+/MaiMaiFocusPet-Godot/

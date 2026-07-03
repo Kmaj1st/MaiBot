@@ -1,19 +1,159 @@
+from collections import defaultdict
+from datetime import datetime, timedelta
+from html import escape
+from os import getenv
+from pathlib import Path
+from typing import cast
+
 import asyncio
 import concurrent.futures
 import json
 
-from collections import defaultdict
-from datetime import datetime, timedelta
-from typing import Any, Dict, Tuple, List
+from typing_extensions import TypedDict
 
 from src.common.logger import get_logger
-from src.common.database.database import db
-from src.common.database.database_model import OnlineTime, LLMUsage, Messages, ActionRecords
 from src.manager.async_task_manager import AsyncTask
-from src.manager.local_store_manager import local_storage
-from src.config.config import global_config
 
 logger = get_logger("maibot_statistic")
+
+STATISTICS_REPORT_PATH_ENV = "MAIBOT_STATISTICS_REPORT_PATH"
+DEFAULT_STATISTICS_REPORT_PATH = "maibot_statistics.html"
+
+
+class _LocalStorageProxy:
+    """延迟访问本地存储，避免导入统计任务时读取完整本地记事本。"""
+
+    @staticmethod
+    def _store():
+        from src.manager.local_store_manager import local_storage
+
+        return local_storage
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._store()
+
+    def __getitem__(self, key: str):
+        return self._store()[key]
+
+    def __setitem__(self, key: str, value) -> None:
+        self._store()[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self._store()[key]
+
+
+local_storage = _LocalStorageProxy()
+
+
+def fetch_messages_since(*args, **kwargs):
+    from src.services.statistics_service import fetch_messages_since as impl
+
+    return impl(*args, **kwargs)
+
+
+def fetch_model_usage_since(*args, **kwargs):
+    from src.services.statistics_service import fetch_model_usage_since as impl
+
+    return impl(*args, **kwargs)
+
+
+def fetch_online_time_since(*args, **kwargs):
+    from src.services.statistics_service import fetch_online_time_since as impl
+
+    return impl(*args, **kwargs)
+
+
+def get_earliest_statistics_time(*args, **kwargs):
+    from src.services.statistics_service import get_earliest_statistics_time as impl
+
+    return impl(*args, **kwargs)
+
+
+async def refresh_dashboard_statistics_cache(*args, **kwargs):
+    from src.services.statistics_service import refresh_dashboard_statistics_cache as impl
+
+    return await impl(*args, **kwargs)
+
+
+def count_tool_records_since(*args, **kwargs):
+    from src.services.statistics_aggregation_service import count_tool_records_since as impl
+
+    return impl(*args, **kwargs)
+
+
+def fetch_message_count_by_chat_since(*args, **kwargs):
+    from src.services.statistics_aggregation_service import fetch_message_count_by_chat_since as impl
+
+    return impl(*args, **kwargs)
+
+
+def refresh_statistics_aggregates(*args, **kwargs):
+    from src.services.statistics_aggregation_service import refresh_statistics_aggregates as impl
+
+    return impl(*args, **kwargs)
+
+
+def _resolve_statistics_report_path(record_file_path: str | None = None) -> str:
+    if record_file_path:
+        return record_file_path
+
+    configured_path = getenv(STATISTICS_REPORT_PATH_ENV, "").strip()
+    return configured_path or DEFAULT_STATISTICS_REPORT_PATH
+
+
+class StatPeriodData(TypedDict):
+    total_requests: int
+    total_cost: float
+    requests_by_type: defaultdict[str, int]
+    requests_by_user: defaultdict[str, int]
+    requests_by_model: defaultdict[str, int]
+    requests_by_module: defaultdict[str, int]
+    in_tokens_by_type: defaultdict[str, int]
+    in_tokens_by_user: defaultdict[str, int]
+    in_tokens_by_model: defaultdict[str, int]
+    in_tokens_by_module: defaultdict[str, int]
+    out_tokens_by_type: defaultdict[str, int]
+    out_tokens_by_user: defaultdict[str, int]
+    out_tokens_by_model: defaultdict[str, int]
+    out_tokens_by_module: defaultdict[str, int]
+    tokens_by_type: defaultdict[str, int]
+    tokens_by_user: defaultdict[str, int]
+    tokens_by_model: defaultdict[str, int]
+    tokens_by_module: defaultdict[str, int]
+    costs_by_type: defaultdict[str, float]
+    costs_by_user: defaultdict[str, float]
+    costs_by_model: defaultdict[str, float]
+    costs_by_module: defaultdict[str, float]
+    costs_by_chat: defaultdict[str, float]
+    cache_hit_tokens: int
+    cache_miss_tokens: int
+    cache_hit_tokens_by_type: defaultdict[str, int]
+    cache_hit_tokens_by_user: defaultdict[str, int]
+    cache_hit_tokens_by_model: defaultdict[str, int]
+    cache_hit_tokens_by_module: defaultdict[str, int]
+    cache_miss_tokens_by_type: defaultdict[str, int]
+    cache_miss_tokens_by_user: defaultdict[str, int]
+    cache_miss_tokens_by_model: defaultdict[str, int]
+    cache_miss_tokens_by_module: defaultdict[str, int]
+    time_costs_by_type: defaultdict[str, list[float]]
+    time_costs_by_user: defaultdict[str, list[float]]
+    time_costs_by_model: defaultdict[str, list[float]]
+    time_costs_by_module: defaultdict[str, list[float]]
+    avg_time_costs_by_type: defaultdict[str, float]
+    avg_time_costs_by_user: defaultdict[str, float]
+    avg_time_costs_by_model: defaultdict[str, float]
+    avg_time_costs_by_module: defaultdict[str, float]
+    std_time_costs_by_type: defaultdict[str, float]
+    std_time_costs_by_user: defaultdict[str, float]
+    std_time_costs_by_model: defaultdict[str, float]
+    std_time_costs_by_module: defaultdict[str, float]
+    online_time: float
+    total_messages: int
+    messages_by_chat: defaultdict[str, int]
+    total_replies: int
+
+
+StatPeriodMapping = dict[str, StatPeriodData]
 
 # 统计数据的键
 TOTAL_REQ_CNT = "total_requests"
@@ -38,6 +178,18 @@ COST_BY_TYPE = "costs_by_type"
 COST_BY_USER = "costs_by_user"
 COST_BY_MODEL = "costs_by_model"
 COST_BY_MODULE = "costs_by_module"
+COST_BY_CHAT = "costs_by_chat"
+GLOBAL_COST_SESSION_KEY = "__global__"
+CACHE_HIT_TOK = "cache_hit_tokens"
+CACHE_MISS_TOK = "cache_miss_tokens"
+CACHE_HIT_TOK_BY_TYPE = "cache_hit_tokens_by_type"
+CACHE_HIT_TOK_BY_USER = "cache_hit_tokens_by_user"
+CACHE_HIT_TOK_BY_MODEL = "cache_hit_tokens_by_model"
+CACHE_HIT_TOK_BY_MODULE = "cache_hit_tokens_by_module"
+CACHE_MISS_TOK_BY_TYPE = "cache_miss_tokens_by_type"
+CACHE_MISS_TOK_BY_USER = "cache_miss_tokens_by_user"
+CACHE_MISS_TOK_BY_MODEL = "cache_miss_tokens_by_model"
+CACHE_MISS_TOK_BY_MODULE = "cache_miss_tokens_by_module"
 TIME_COST_BY_TYPE = "time_costs_by_type"
 TIME_COST_BY_USER = "time_costs_by_user"
 TIME_COST_BY_MODEL = "time_costs_by_model"
@@ -70,8 +222,10 @@ class OnlineTimeRecordTask(AsyncTask):
     @staticmethod
     def _init_database():
         """初始化数据库"""
-        with db.atomic():  # Use atomic operations for schema changes
-            OnlineTime.create_table(safe=True)  # Creates table if it doesn't exist, Peewee handles indexes from model
+        from src.common.database.database import get_db_session
+
+        with get_db_session() as _:
+            return
 
     async def run(self):  # sourcery skip: use-named-expression
         try:
@@ -80,36 +234,49 @@ class OnlineTimeRecordTask(AsyncTask):
 
             if self.record_id:
                 # 如果有记录，则更新结束时间
-                query = OnlineTime.update(end_timestamp=extended_end_time).where(OnlineTime.id == self.record_id)  # type: ignore
-                updated_rows = query.execute()
-                if updated_rows == 0:
-                    # Record might have been deleted or ID is stale, try to find/create
-                    self.record_id = None  # Reset record_id to trigger find/create logic below
+                from sqlmodel import col, select
+                from src.common.database.database import get_db_session
+                from src.common.database.database_model import OnlineTime
+
+                with get_db_session() as session:
+                    statement = select(OnlineTime).where(col(OnlineTime.id) == self.record_id).limit(1)
+                    existing_record = session.exec(statement).first()
+                    if existing_record:
+                        existing_record.end_timestamp = extended_end_time
+                        session.add(existing_record)
+                    else:
+                        self.record_id = None
 
             if not self.record_id:  # Check again if record_id was reset or initially None
                 # 如果没有记录，检查一分钟以内是否已有记录
                 # Look for a record whose end_timestamp is recent enough to be considered ongoing
-                recent_record = (
-                    OnlineTime.select()
-                    .where(OnlineTime.end_timestamp >= (current_time - timedelta(minutes=1)))  # type: ignore
-                    .order_by(OnlineTime.end_timestamp.desc())
-                    .first()
-                )
+                from sqlmodel import col, select
+                from src.common.database.database import get_db_session
+                from src.common.database.database_model import OnlineTime
 
-                if recent_record:
-                    # 如果有记录，则更新结束时间
-                    self.record_id = recent_record.id
-                    recent_record.end_timestamp = extended_end_time
-                    recent_record.save()
-                else:
-                    # 若没有记录，则插入新的在线时间记录
-                    new_record = OnlineTime.create(
-                        timestamp=current_time.timestamp(),  # 添加此行
-                        start_timestamp=current_time,
-                        end_timestamp=extended_end_time,
-                        duration=5,  # 初始时长为5分钟
+                with get_db_session() as session:
+                    statement = (
+                        select(OnlineTime)
+                        .where(col(OnlineTime.end_timestamp) >= (current_time - timedelta(minutes=1)))
+                        .order_by(col(OnlineTime.end_timestamp).desc())
+                        .limit(1)
                     )
-                    self.record_id = new_record.id
+                    recent_record = session.exec(statement).first()
+
+                    if recent_record:
+                        self.record_id = recent_record.id
+                        recent_record.end_timestamp = extended_end_time
+                        session.add(recent_record)
+                    else:
+                        new_record = OnlineTime(
+                            timestamp=current_time,
+                            start_timestamp=current_time,
+                            end_timestamp=extended_end_time,
+                            duration_minutes=5,
+                        )
+                        session.add(new_record)
+                        session.flush()
+                        self.record_id = new_record.id
         except Exception as e:
             logger.error(f"在线时间记录失败，错误信息：{e}")
 
@@ -156,7 +323,7 @@ def _format_large_number(num: float | int, html: bool = False) -> str:
 
         if html:
             # HTML输出：K着色为主题色并加粗大写
-            return f"{number_part}<span style='color: #8b5cf6; font-weight: bold;'>K</span>"
+            return f"{number_part}<span style='color: var(--statistics-primary); font-weight: bold;'>K</span>"
         else:
             # 控制台输出：纯文本，K大写
             return f"{number_part}{k_suffix}"
@@ -168,22 +335,79 @@ def _format_large_number(num: float | int, html: bool = False) -> str:
             return str(num)
 
 
+def _normalize_prompt_cache_tokens(prompt_tokens: int, hit_tokens: int, miss_tokens: int) -> tuple[int, int]:
+    """将 provider 返回的 prompt cache token 统计规范化为可聚合值。"""
+
+    normalized_hit_tokens = max(hit_tokens, 0)
+    normalized_miss_tokens = max(miss_tokens, 0)
+    if normalized_miss_tokens == 0 and normalized_hit_tokens > 0:
+        normalized_miss_tokens = max(prompt_tokens - normalized_hit_tokens, 0)
+    if normalized_hit_tokens + normalized_miss_tokens == 0 and prompt_tokens > 0:
+        normalized_miss_tokens = prompt_tokens
+    return normalized_hit_tokens, normalized_miss_tokens
+
+
+def _format_cache_hit_rate(hit_tokens: int, miss_tokens: int) -> str:
+    total_cache_tokens = hit_tokens + miss_tokens
+    if total_cache_tokens <= 0:
+        return "N/A"
+    return f"{hit_tokens / total_cache_tokens * 100:.2f}%"
+
+
+def _json_for_html_script(value: object) -> str:
+    json_text = json.dumps(value, ensure_ascii=False)
+    return (
+        json_text.replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def _build_llm_owner_costs(costs_by_type: defaultdict[str, float]) -> dict[str, float]:
+    """按 LLM 调用来源聚合花费，区分本体与各插件。"""
+
+    owner_costs: defaultdict[str, float] = defaultdict(float)
+    for request_type, cost in costs_by_type.items():
+        normalized_request_type = str(request_type or "").strip()
+        if normalized_request_type.startswith("plugin."):
+            plugin_id = normalized_request_type.removeprefix("plugin.").strip()
+            if plugin_id.endswith(".asr"):
+                plugin_id = plugin_id.removesuffix(".asr").strip()
+            owner_label = f"插件 {plugin_id}" if plugin_id else "插件（未知）"
+        else:
+            owner_label = "本体"
+        owner_costs[owner_label] += float(cost or 0.0)
+
+    return {
+        owner_label: owner_costs[owner_label]
+        for owner_label in sorted(owner_costs.keys(), key=lambda label: (label != "本体", label))
+        if owner_costs[owner_label] > 0
+    }
+
+
 class StatisticOutputTask(AsyncTask):
     """统计输出任务"""
 
     SEP_LINE = "-" * 84
+    RUN_INTERVAL_SECONDS = 15 * 60
 
-    def __init__(self, record_file_path: str = "maibot_statistics.html"):
-        # 延迟300秒启动，运行间隔300秒
-        super().__init__(task_name="Statistics Data Output Task", wait_before_start=0, run_interval=300)
+    def __init__(self, record_file_path: str | None = None):
+        # 启动后立即运行，之后每15分钟输出一次统计数据
+        super().__init__(
+            task_name="Statistics Data Output Task",
+            wait_before_start=0,
+            run_interval=self.RUN_INTERVAL_SECONDS,
+        )
 
-        self.name_mapping: Dict[str, Tuple[str, float]] = {}
+        self.name_mapping: dict[str, tuple[str, float]] = {}
         """
             联系人/群聊名称映射 {聊天ID: (联系人/群聊名称, 记录时间（timestamp）)}
             注：设计记录时间的目的是方便更新名称，使联系人/群聊名称保持最新
         """
 
-        self.record_file_path: str = record_file_path
+        self.record_file_path: str = _resolve_statistics_report_path(record_file_path)
         """
         记录文件路径
         """
@@ -191,14 +415,18 @@ class StatisticOutputTask(AsyncTask):
         now = datetime.now()
         if "deploy_time" in local_storage:
             # 如果存在部署时间，则使用该时间作为全量统计的起始时间
-            deploy_time = datetime.fromtimestamp(local_storage["deploy_time"])  # type: ignore
+            deploy_time = datetime.fromtimestamp(self._to_float_timestamp(local_storage["deploy_time"]))
         else:
             # 否则，使用最大时间范围，并记录部署时间为当前时间
             deploy_time = datetime(2000, 1, 1)
             local_storage["deploy_time"] = now.timestamp()
 
-        self.stat_period: List[Tuple[str, timedelta, str]] = [
-            ("all_time", now - deploy_time, "自部署以来"),  # 必须保留"all_time"
+        self._deploy_time = deploy_time
+        self._all_time_start_resolved = False
+        self.all_time_start_time = deploy_time
+
+        self.stat_period: list[tuple[str, timedelta, str]] = [
+            ("all_time", now - self.all_time_start_time, "自部署以来"),  # 必须保留"all_time"
             ("last_30_days", timedelta(days=30), "近30天"),
             ("last_7_days", timedelta(days=7), "近7天"),
             ("last_3_days", timedelta(days=3), "近3天"),
@@ -211,7 +439,20 @@ class StatisticOutputTask(AsyncTask):
         统计时间段 [(统计名称, 统计时间段, 统计描述), ...]
         """
 
-    def _statistic_console_output(self, stats: Dict[str, Any], now: datetime):
+
+    def _ensure_all_time_start_time(self, now: datetime) -> None:
+        """首次输出统计前再查询真实最早统计时间。"""
+
+        if self._all_time_start_resolved:
+            return
+
+        self.all_time_start_time = get_earliest_statistics_time(self._deploy_time)
+        self.stat_period = [item for item in self.stat_period if item[0] != "all_time"]
+        self.stat_period.insert(0, ("all_time", now - self.all_time_start_time, "自部署以来"))
+        self._all_time_start_resolved = True
+
+
+    def _statistic_console_output(self, stats: StatPeriodMapping, now: datetime) -> None:
         """
         输出统计数据到控制台
         :param stats: 统计数据
@@ -239,6 +480,7 @@ class StatisticOutputTask(AsyncTask):
     async def run(self):
         try:
             now = datetime.now()
+            self._ensure_all_time_start_time(now)
 
             # 使用线程池并行执行耗时操作
             loop = asyncio.get_event_loop()
@@ -247,11 +489,17 @@ class StatisticOutputTask(AsyncTask):
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 logger.info("正在收集统计数据...")
 
+                await loop.run_in_executor(executor, refresh_statistics_aggregates)
+
                 # 数据收集任务
                 collect_task = loop.run_in_executor(executor, self._collect_all_statistics, now)
 
                 # 等待数据收集完成
                 stats = await collect_task
+                try:
+                    await refresh_dashboard_statistics_cache()
+                except Exception as e:
+                    logger.warning(f"刷新 WebUI 统计缓存失败，将继续生成 HTML 报告: {e}")
                 logger.info("统计数据收集完成")
 
                 # 并行执行控制台输出和HTML报告生成
@@ -276,23 +524,23 @@ class StatisticOutputTask(AsyncTask):
                 import concurrent.futures
 
                 now = datetime.now()
+                self._ensure_all_time_start_time(now)
                 loop = asyncio.get_event_loop()
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     logger.info("正在后台收集统计数据...")
 
-                    # 创建后台任务，不等待完成
-                    collect_task = asyncio.create_task(
-                        loop.run_in_executor(executor, self._collect_all_statistics, now)  # type: ignore
-                    )
-
-                    stats = await collect_task
+                    stats = await loop.run_in_executor(executor, self._collect_all_statistics, now)
+                    try:
+                        await refresh_dashboard_statistics_cache()
+                    except Exception as e:
+                        logger.warning(f"刷新 WebUI 统计缓存失败，将继续生成 HTML 报告: {e}")
                     logger.info("统计数据收集完成")
 
                     # 创建并发的输出任务
                     output_tasks = [
-                        asyncio.create_task(loop.run_in_executor(executor, self._statistic_console_output, stats, now)),  # type: ignore
-                        asyncio.create_task(loop.run_in_executor(executor, self._generate_html_report, stats, now)),  # type: ignore
+                        loop.run_in_executor(executor, self._statistic_console_output, stats, now),
+                        loop.run_in_executor(executor, self._generate_html_report, stats, now),
                     ]
 
                     # 等待所有输出任务完成
@@ -308,7 +556,97 @@ class StatisticOutputTask(AsyncTask):
     # -- 以下为统计数据收集方法 --
 
     @staticmethod
-    def _collect_model_request_for_period(collect_period: List[Tuple[str, datetime]]) -> Dict[str, Any]:
+    def _build_stat_period_data() -> StatPeriodData:
+        time_costs_by_type: defaultdict[str, list[float]] = defaultdict(list)
+        time_costs_by_user: defaultdict[str, list[float]] = defaultdict(list)
+        time_costs_by_model: defaultdict[str, list[float]] = defaultdict(list)
+        time_costs_by_module: defaultdict[str, list[float]] = defaultdict(list)
+        avg_time_costs_by_type: defaultdict[str, float] = defaultdict(float)
+        avg_time_costs_by_user: defaultdict[str, float] = defaultdict(float)
+        avg_time_costs_by_model: defaultdict[str, float] = defaultdict(float)
+        avg_time_costs_by_module: defaultdict[str, float] = defaultdict(float)
+        std_time_costs_by_type: defaultdict[str, float] = defaultdict(float)
+        std_time_costs_by_user: defaultdict[str, float] = defaultdict(float)
+        std_time_costs_by_model: defaultdict[str, float] = defaultdict(float)
+        std_time_costs_by_module: defaultdict[str, float] = defaultdict(float)
+
+        return {
+            TOTAL_REQ_CNT: 0,
+            REQ_CNT_BY_TYPE: defaultdict(int),
+            REQ_CNT_BY_USER: defaultdict(int),
+            REQ_CNT_BY_MODEL: defaultdict(int),
+            REQ_CNT_BY_MODULE: defaultdict(int),
+            IN_TOK_BY_TYPE: defaultdict(int),
+            IN_TOK_BY_USER: defaultdict(int),
+            IN_TOK_BY_MODEL: defaultdict(int),
+            IN_TOK_BY_MODULE: defaultdict(int),
+            OUT_TOK_BY_TYPE: defaultdict(int),
+            OUT_TOK_BY_USER: defaultdict(int),
+            OUT_TOK_BY_MODEL: defaultdict(int),
+            OUT_TOK_BY_MODULE: defaultdict(int),
+            TOTAL_TOK_BY_TYPE: defaultdict(int),
+            TOTAL_TOK_BY_USER: defaultdict(int),
+            TOTAL_TOK_BY_MODEL: defaultdict(int),
+            TOTAL_TOK_BY_MODULE: defaultdict(int),
+            TOTAL_COST: 0.0,
+            COST_BY_TYPE: defaultdict(float),
+            COST_BY_USER: defaultdict(float),
+            COST_BY_MODEL: defaultdict(float),
+            COST_BY_MODULE: defaultdict(float),
+            COST_BY_CHAT: defaultdict(float),
+            CACHE_HIT_TOK: 0,
+            CACHE_MISS_TOK: 0,
+            CACHE_HIT_TOK_BY_TYPE: defaultdict(int),
+            CACHE_HIT_TOK_BY_USER: defaultdict(int),
+            CACHE_HIT_TOK_BY_MODEL: defaultdict(int),
+            CACHE_HIT_TOK_BY_MODULE: defaultdict(int),
+            CACHE_MISS_TOK_BY_TYPE: defaultdict(int),
+            CACHE_MISS_TOK_BY_USER: defaultdict(int),
+            CACHE_MISS_TOK_BY_MODEL: defaultdict(int),
+            CACHE_MISS_TOK_BY_MODULE: defaultdict(int),
+            TIME_COST_BY_TYPE: time_costs_by_type,
+            TIME_COST_BY_USER: time_costs_by_user,
+            TIME_COST_BY_MODEL: time_costs_by_model,
+            TIME_COST_BY_MODULE: time_costs_by_module,
+            AVG_TIME_COST_BY_TYPE: avg_time_costs_by_type,
+            AVG_TIME_COST_BY_USER: avg_time_costs_by_user,
+            AVG_TIME_COST_BY_MODEL: avg_time_costs_by_model,
+            AVG_TIME_COST_BY_MODULE: avg_time_costs_by_module,
+            STD_TIME_COST_BY_TYPE: std_time_costs_by_type,
+            STD_TIME_COST_BY_USER: std_time_costs_by_user,
+            STD_TIME_COST_BY_MODEL: std_time_costs_by_model,
+            STD_TIME_COST_BY_MODULE: std_time_costs_by_module,
+            ONLINE_TIME: 0.0,
+            TOTAL_MSG_CNT: 0,
+            MSG_CNT_BY_CHAT: defaultdict(int),
+            TOTAL_REPLY_CNT: 0,
+        }
+
+    @staticmethod
+    def _add_int_stat(stats_period: StatPeriodData, key: str, amount: int) -> None:
+        stats_period[key] = cast(int, stats_period.get(key, 0)) + amount
+
+    @staticmethod
+    def _add_float_stat(stats_period: StatPeriodData, key: str, amount: float) -> None:
+        stats_period[key] = cast(float, stats_period.get(key, 0.0)) + amount
+
+    @staticmethod
+    def _add_defaultdict_int(stats_period: StatPeriodData, key: str, subkey: str, amount: int) -> None:
+        counter = cast(defaultdict[str, int], stats_period[key])
+        counter[subkey] += amount
+
+    @staticmethod
+    def _add_defaultdict_float(stats_period: StatPeriodData, key: str, subkey: str, amount: float) -> None:
+        counter = cast(defaultdict[str, float], stats_period[key])
+        counter[subkey] += amount
+
+    @staticmethod
+    def _append_defaultdict_list(stats_period: StatPeriodData, key: str, subkey: str, value: float) -> None:
+        counter = cast(defaultdict[str, list[float]], stats_period[key])
+        counter[subkey].append(value)
+
+    @staticmethod
+    def _collect_model_request_for_period(collect_period: list[tuple[str, datetime]]) -> StatPeriodMapping:
         """
         收集指定时间段的LLM请求统计数据
 
@@ -320,101 +658,138 @@ class StatisticOutputTask(AsyncTask):
         # 排序-按照时间段开始时间降序排列（最晚的时间段在前）
         collect_period.sort(key=lambda x: x[1], reverse=True)
 
-        stats = {
-            period_key: {
-                TOTAL_REQ_CNT: 0,
-                REQ_CNT_BY_TYPE: defaultdict(int),
-                REQ_CNT_BY_USER: defaultdict(int),
-                REQ_CNT_BY_MODEL: defaultdict(int),
-                REQ_CNT_BY_MODULE: defaultdict(int),
-                IN_TOK_BY_TYPE: defaultdict(int),
-                IN_TOK_BY_USER: defaultdict(int),
-                IN_TOK_BY_MODEL: defaultdict(int),
-                IN_TOK_BY_MODULE: defaultdict(int),
-                OUT_TOK_BY_TYPE: defaultdict(int),
-                OUT_TOK_BY_USER: defaultdict(int),
-                OUT_TOK_BY_MODEL: defaultdict(int),
-                OUT_TOK_BY_MODULE: defaultdict(int),
-                TOTAL_TOK_BY_TYPE: defaultdict(int),
-                TOTAL_TOK_BY_USER: defaultdict(int),
-                TOTAL_TOK_BY_MODEL: defaultdict(int),
-                TOTAL_TOK_BY_MODULE: defaultdict(int),
-                TOTAL_COST: 0.0,
-                COST_BY_TYPE: defaultdict(float),
-                COST_BY_USER: defaultdict(float),
-                COST_BY_MODEL: defaultdict(float),
-                COST_BY_MODULE: defaultdict(float),
-                TIME_COST_BY_TYPE: defaultdict(list),
-                TIME_COST_BY_USER: defaultdict(list),
-                TIME_COST_BY_MODEL: defaultdict(list),
-                TIME_COST_BY_MODULE: defaultdict(list),
-                AVG_TIME_COST_BY_TYPE: defaultdict(float),
-                AVG_TIME_COST_BY_USER: defaultdict(float),
-                AVG_TIME_COST_BY_MODEL: defaultdict(float),
-                AVG_TIME_COST_BY_MODULE: defaultdict(float),
-                STD_TIME_COST_BY_TYPE: defaultdict(float),
-                STD_TIME_COST_BY_USER: defaultdict(float),
-                STD_TIME_COST_BY_MODEL: defaultdict(float),
-                STD_TIME_COST_BY_MODULE: defaultdict(float),
-            }
-            for period_key, _ in collect_period
+        stats: StatPeriodMapping = {
+            period_key: StatisticOutputTask._build_stat_period_data() for period_key, _ in collect_period
         }
 
         # 以最早的时间戳为起始时间获取记录
         # Assuming LLMUsage.timestamp is a DateTimeField
         query_start_time = collect_period[-1][1]
-        for record in LLMUsage.select().where(LLMUsage.timestamp >= query_start_time):  # type: ignore
-            record_timestamp = record.timestamp  # This is already a datetime object
+        records = fetch_model_usage_since(query_start_time)
+        for record in records:
+            record_timestamp = cast(datetime, record["timestamp"])
             for idx, (_, period_start) in enumerate(collect_period):
                 if record_timestamp >= period_start:
                     for period_key, _ in collect_period[idx:]:
-                        stats[period_key][TOTAL_REQ_CNT] += 1
+                        StatisticOutputTask._add_int_stat(stats[period_key], TOTAL_REQ_CNT, 1)
 
-                        request_type = record.request_type or "unknown"
-                        user_id = record.user_id or "unknown"  # user_id is TextField, already string
-                        model_name = record.model_assign_name or record.model_name or "unknown"
+                        request_type = cast(str | None, record["request_type"]) or "unknown"
+                        user_id = cast(str | None, record["model_api_provider_name"]) or "unknown"
+                        model_assign_name = cast(str | None, record["model_assign_name"])
+                        model_name = model_assign_name or cast(str | None, record["model_name"]) or "unknown"
+                        session_id = str(record.get("session_id") or "").strip()
+                        chat_cost_key = session_id if session_id else GLOBAL_COST_SESSION_KEY
 
                         # 提取模块名：如果请求类型包含"."，取第一个"."之前的部分
                         module_name = request_type.split(".")[0] if "." in request_type else request_type
 
-                        stats[period_key][REQ_CNT_BY_TYPE][request_type] += 1
-                        stats[period_key][REQ_CNT_BY_USER][user_id] += 1
-                        stats[period_key][REQ_CNT_BY_MODEL][model_name] += 1
-                        stats[period_key][REQ_CNT_BY_MODULE][module_name] += 1
+                        StatisticOutputTask._add_defaultdict_int(stats[period_key], REQ_CNT_BY_TYPE, request_type, 1)
+                        StatisticOutputTask._add_defaultdict_int(stats[period_key], REQ_CNT_BY_USER, user_id, 1)
+                        StatisticOutputTask._add_defaultdict_int(stats[period_key], REQ_CNT_BY_MODEL, model_name, 1)
+                        StatisticOutputTask._add_defaultdict_int(stats[period_key], REQ_CNT_BY_MODULE, module_name, 1)
 
-                        prompt_tokens = record.prompt_tokens or 0
-                        completion_tokens = record.completion_tokens or 0
+                        prompt_tokens = cast(int | None, record["prompt_tokens"]) or 0
+                        completion_tokens = cast(int | None, record["completion_tokens"]) or 0
                         total_tokens = prompt_tokens + completion_tokens
+                        prompt_cache_enabled = bool(record.get("prompt_cache_enabled"))
+                        prompt_cache_hit_tokens = 0
+                        prompt_cache_miss_tokens = 0
+                        if prompt_cache_enabled:
+                            prompt_cache_hit_tokens, prompt_cache_miss_tokens = _normalize_prompt_cache_tokens(
+                                prompt_tokens=prompt_tokens,
+                                hit_tokens=cast(int | None, record.get("prompt_cache_hit_tokens")) or 0,
+                                miss_tokens=cast(int | None, record.get("prompt_cache_miss_tokens")) or 0,
+                            )
 
-                        stats[period_key][IN_TOK_BY_TYPE][request_type] += prompt_tokens
-                        stats[period_key][IN_TOK_BY_USER][user_id] += prompt_tokens
-                        stats[period_key][IN_TOK_BY_MODEL][model_name] += prompt_tokens
-                        stats[period_key][IN_TOK_BY_MODULE][module_name] += prompt_tokens
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], IN_TOK_BY_TYPE, request_type, prompt_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], IN_TOK_BY_USER, user_id, prompt_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], IN_TOK_BY_MODEL, model_name, prompt_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], IN_TOK_BY_MODULE, module_name, prompt_tokens
+                        )
 
-                        stats[period_key][OUT_TOK_BY_TYPE][request_type] += completion_tokens
-                        stats[period_key][OUT_TOK_BY_USER][user_id] += completion_tokens
-                        stats[period_key][OUT_TOK_BY_MODEL][model_name] += completion_tokens
-                        stats[period_key][OUT_TOK_BY_MODULE][module_name] += completion_tokens
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], OUT_TOK_BY_TYPE, request_type, completion_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], OUT_TOK_BY_USER, user_id, completion_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], OUT_TOK_BY_MODEL, model_name, completion_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], OUT_TOK_BY_MODULE, module_name, completion_tokens
+                        )
 
-                        stats[period_key][TOTAL_TOK_BY_TYPE][request_type] += total_tokens
-                        stats[period_key][TOTAL_TOK_BY_USER][user_id] += total_tokens
-                        stats[period_key][TOTAL_TOK_BY_MODEL][model_name] += total_tokens
-                        stats[period_key][TOTAL_TOK_BY_MODULE][module_name] += total_tokens
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], TOTAL_TOK_BY_TYPE, request_type, total_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], TOTAL_TOK_BY_USER, user_id, total_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], TOTAL_TOK_BY_MODEL, model_name, total_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], TOTAL_TOK_BY_MODULE, module_name, total_tokens
+                        )
 
-                        cost = record.cost or 0.0
-                        stats[period_key][TOTAL_COST] += cost
-                        stats[period_key][COST_BY_TYPE][request_type] += cost
-                        stats[period_key][COST_BY_USER][user_id] += cost
-                        stats[period_key][COST_BY_MODEL][model_name] += cost
-                        stats[period_key][COST_BY_MODULE][module_name] += cost
+                        StatisticOutputTask._add_int_stat(stats[period_key], CACHE_HIT_TOK, prompt_cache_hit_tokens)
+                        StatisticOutputTask._add_int_stat(stats[period_key], CACHE_MISS_TOK, prompt_cache_miss_tokens)
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], CACHE_HIT_TOK_BY_TYPE, request_type, prompt_cache_hit_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], CACHE_HIT_TOK_BY_USER, user_id, prompt_cache_hit_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], CACHE_HIT_TOK_BY_MODEL, model_name, prompt_cache_hit_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], CACHE_HIT_TOK_BY_MODULE, module_name, prompt_cache_hit_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], CACHE_MISS_TOK_BY_TYPE, request_type, prompt_cache_miss_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], CACHE_MISS_TOK_BY_USER, user_id, prompt_cache_miss_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], CACHE_MISS_TOK_BY_MODEL, model_name, prompt_cache_miss_tokens
+                        )
+                        StatisticOutputTask._add_defaultdict_int(
+                            stats[period_key], CACHE_MISS_TOK_BY_MODULE, module_name, prompt_cache_miss_tokens
+                        )
+
+                        cost = cast(float | None, record["cost"]) or 0.0
+                        StatisticOutputTask._add_float_stat(stats[period_key], TOTAL_COST, cost)
+                        StatisticOutputTask._add_defaultdict_float(stats[period_key], COST_BY_TYPE, request_type, cost)
+                        StatisticOutputTask._add_defaultdict_float(stats[period_key], COST_BY_USER, user_id, cost)
+                        StatisticOutputTask._add_defaultdict_float(stats[period_key], COST_BY_MODEL, model_name, cost)
+                        StatisticOutputTask._add_defaultdict_float(stats[period_key], COST_BY_MODULE, module_name, cost)
+                        StatisticOutputTask._add_defaultdict_float(stats[period_key], COST_BY_CHAT, chat_cost_key, cost)
 
                         # 收集time_cost数据
-                        time_cost = record.time_cost or 0.0
+                        time_cost = cast(float | None, record["time_cost"]) or 0.0
                         if time_cost > 0:  # 只记录有效的time_cost
-                            stats[period_key][TIME_COST_BY_TYPE][request_type].append(time_cost)
-                            stats[period_key][TIME_COST_BY_USER][user_id].append(time_cost)
-                            stats[period_key][TIME_COST_BY_MODEL][model_name].append(time_cost)
-                            stats[period_key][TIME_COST_BY_MODULE][module_name].append(time_cost)
+                            StatisticOutputTask._append_defaultdict_list(
+                                stats[period_key], TIME_COST_BY_TYPE, request_type, time_cost
+                            )
+                            StatisticOutputTask._append_defaultdict_list(
+                                stats[period_key], TIME_COST_BY_USER, user_id, time_cost
+                            )
+                            StatisticOutputTask._append_defaultdict_list(
+                                stats[period_key], TIME_COST_BY_MODEL, model_name, time_cost
+                            )
+                            StatisticOutputTask._append_defaultdict_list(
+                                stats[period_key], TIME_COST_BY_MODULE, module_name, time_cost
+                            )
                     break
 
         # 计算平均耗时和标准差
@@ -424,28 +799,39 @@ class StatisticOutputTask(AsyncTask):
                 avg_key = f"avg_time_costs_by_{category.split('_')[-1]}"
                 std_key = f"std_time_costs_by_{category.split('_')[-1]}"
 
-                for item_name in stats[period_key][category]:
-                    time_costs = stats[period_key][time_cost_key].get(item_name, [])
+                category_data = cast(dict[str, int], stats[period_key].get(category, {}))
+                time_cost_data = cast(dict[str, list[float]], stats[period_key].get(time_cost_key, {}))
+                avg_cost_data = cast(dict[str, float], stats[period_key].get(avg_key, {}))
+                std_cost_data = cast(dict[str, float], stats[period_key].get(std_key, {}))
+
+                for item_name in category_data:
+                    time_costs = time_cost_data.get(item_name, [])
                     if time_costs:
                         # 计算平均耗时
                         avg_time_cost = sum(time_costs) / len(time_costs)
-                        stats[period_key][avg_key][item_name] = round(avg_time_cost, 3)
+                        avg_cost_data[item_name] = round(avg_time_cost, 3)
 
                         # 计算标准差
                         if len(time_costs) > 1:
                             variance = sum((x - avg_time_cost) ** 2 for x in time_costs) / len(time_costs)
                             std_time_cost = variance**0.5
-                            stats[period_key][std_key][item_name] = round(std_time_cost, 3)
+                            std_cost_data[item_name] = round(std_time_cost, 3)
                         else:
-                            stats[period_key][std_key][item_name] = 0.0
+                            std_cost_data[item_name] = 0.0
                     else:
-                        stats[period_key][avg_key][item_name] = 0.0
-                        stats[period_key][std_key][item_name] = 0.0
+                        avg_cost_data[item_name] = 0.0
+                        std_cost_data[item_name] = 0.0
+
+                stats[period_key][avg_key] = avg_cost_data
+                stats[period_key][std_key] = std_cost_data
 
         return stats
 
     @staticmethod
-    def _collect_online_time_for_period(collect_period: List[Tuple[str, datetime]], now: datetime) -> Dict[str, Any]:
+    def _collect_online_time_for_period(
+        collect_period: list[tuple[str, datetime]],
+        now: datetime,
+    ) -> dict[str, dict[str, float]]:
         """
         收集指定时间段的在线时间统计数据
 
@@ -465,11 +851,8 @@ class StatisticOutputTask(AsyncTask):
 
         query_start_time = collect_period[-1][1]
         # Assuming OnlineTime.end_timestamp is a DateTimeField
-        for record in OnlineTime.select().where(OnlineTime.end_timestamp >= query_start_time):  # type: ignore
-            # record.end_timestamp and record.start_timestamp are datetime objects
-            record_end_timestamp = record.end_timestamp
-            record_start_timestamp = record.start_timestamp
-
+        records = fetch_online_time_since(query_start_time)
+        for record_start_timestamp, record_end_timestamp in records:
             for idx, (_, period_boundary_start) in enumerate(collect_period):
                 if record_end_timestamp >= period_boundary_start:
                     # Calculate effective end time for this record in relation to 'now'
@@ -485,7 +868,10 @@ class StatisticOutputTask(AsyncTask):
                     break
         return stats
 
-    def _collect_message_count_for_period(self, collect_period: List[Tuple[str, datetime]]) -> Dict[str, Any]:
+    def _collect_message_count_for_period(
+        self,
+        collect_period: list[tuple[str, datetime]],
+    ) -> dict[str, dict[str, object]]:
         """
         收集指定时间段的消息统计数据
 
@@ -496,7 +882,7 @@ class StatisticOutputTask(AsyncTask):
 
         collect_period.sort(key=lambda x: x[1], reverse=True)
 
-        stats = {
+        stats: dict[str, dict[str, object]] = {
             period_key: {
                 TOTAL_MSG_CNT: 0,
                 MSG_CNT_BY_CHAT: defaultdict(int),
@@ -505,85 +891,53 @@ class StatisticOutputTask(AsyncTask):
             for period_key, _ in collect_period
         }
 
-        query_start_timestamp = collect_period[-1][1].timestamp()  # Messages.time is a DoubleField (timestamp)
-        for message in Messages.select().where(Messages.time >= query_start_timestamp):  # type: ignore
-            message_time_ts = message.time  # This is a float timestamp
+        for period_key, period_start_dt in collect_period:
+            for message_row in fetch_message_count_by_chat_since(period_start_dt):
+                chat_id = cast(str, message_row["chat_id"])
+                chat_name = cast(str, message_row["chat_name"])
+                message_count = cast(int, message_row["message_count"])
+                latest_timestamp = cast(datetime, message_row["latest_timestamp"])
+                latest_time_ts = latest_timestamp.timestamp()
 
-            chat_id = None
-            chat_name = None
+                try:
+                    if chat_id in self.name_mapping:
+                        if chat_name != self.name_mapping[chat_id][0] and latest_time_ts > self.name_mapping[chat_id][1]:
+                            self.name_mapping[chat_id] = (chat_name, latest_time_ts)
+                    else:
+                        self.name_mapping[chat_id] = (chat_name, latest_time_ts)
+                except (IndexError, TypeError) as e:
+                    logger.warning(f"更新 name_mapping 时发生错误，chat_id: {chat_id}, 错误: {e}")
+                    self.name_mapping[chat_id] = (chat_name, latest_time_ts)
 
-            # Logic based on Peewee model structure, aiming to replicate original intent
-            if message.chat_info_group_id:
-                chat_id = f"g{message.chat_info_group_id}"
-                chat_name = message.chat_info_group_name or f"群{message.chat_info_group_id}"
-            elif message.user_id:  # Fallback to sender's info for chat_id if not a group_info based chat
-                # This uses the message SENDER's ID as per original logic's fallback
-                chat_id = f"u{message.user_id}"  # SENDER's user_id
-                chat_name = message.user_nickname  # SENDER's nickname
-            else:
-                # If neither group_id nor sender_id is available for chat identification
-                logger.warning(
-                    f"Message (PK: {message.id if hasattr(message, 'id') else 'N/A'}) lacks group_id and user_id for chat stats."
-                )
-                continue
+                StatisticOutputTask._add_int_stat(stats[period_key], TOTAL_MSG_CNT, message_count)
+                StatisticOutputTask._add_defaultdict_int(stats[period_key], MSG_CNT_BY_CHAT, chat_id, message_count)
 
-            if not chat_id:  # Should not happen if above logic is correct
-                continue
-
-            # Update name_mapping（仅用于展示聊天名称）
-            try:
-                if chat_id in self.name_mapping:
-                    if chat_name != self.name_mapping[chat_id][0] and message_time_ts > self.name_mapping[chat_id][1]:
-                        self.name_mapping[chat_id] = (chat_name, message_time_ts)
-                else:
-                    self.name_mapping[chat_id] = (chat_name, message_time_ts)
-            except (IndexError, TypeError) as e:
-                logger.warning(f"更新 name_mapping 时发生错误，chat_id: {chat_id}, 错误: {e}")
-                # 重置为正确的格式
-                self.name_mapping[chat_id] = (chat_name, message_time_ts)
-
-            for idx, (_, period_start_dt) in enumerate(collect_period):
-                if message_time_ts >= period_start_dt.timestamp():
-                    for period_key, _ in collect_period[idx:]:
-                        stats[period_key][TOTAL_MSG_CNT] += 1
-                        stats[period_key][MSG_CNT_BY_CHAT][chat_id] += 1
-                    break
-
-        # 使用 ActionRecords 中的 reply 动作次数作为回复数基准
+        # 使用 ToolRecord 中的 reply 工具次数作为回复数基准
         try:
-            action_query_start_timestamp = collect_period[-1][1].timestamp()
-            for action in ActionRecords.select().where(ActionRecords.time >= action_query_start_timestamp):  # type: ignore
-                # 仅统计已完成的 reply 动作
-                if action.action_name != "reply" or not action.action_done:
-                    continue
-
-                action_time_ts = action.time
-                for idx, (_, period_start_dt) in enumerate(collect_period):
-                    if action_time_ts >= period_start_dt.timestamp():
-                        for period_key, _ in collect_period[idx:]:
-                            stats[period_key][TOTAL_REPLY_CNT] += 1
-                        break
+            for period_key, period_start_dt in collect_period:
+                reply_count = count_tool_records_since(period_start_dt, "reply")
+                StatisticOutputTask._add_int_stat(stats[period_key], TOTAL_REPLY_CNT, reply_count)
         except Exception as e:
-            logger.warning(f"统计 reply 动作次数失败，将回复数视为 0，错误信息：{e}")
+            logger.warning(f"统计 reply 工具次数失败，将回复数视为 0，错误信息：{e}")
 
         return stats
 
-    def _collect_all_statistics(self, now: datetime) -> Dict[str, Dict[str, Any]]:
+    def _collect_all_statistics(self, now: datetime) -> StatPeriodMapping:
         """
         收集各时间段的统计数据
         :param now: 基准当前时间
         """
 
-        last_all_time_stat = None
+        last_all_time_stat: dict[str, object] | None = None
 
         try:
             if "last_full_statistics" in local_storage:
                 # 如果存在上次完整统计数据，则使用该数据进行增量统计
-                last_stat: Dict[str, Any] = local_storage["last_full_statistics"]  # 上次完整统计数据 # type: ignore
+                last_stat = cast(dict[str, object], local_storage["last_full_statistics"])
 
                 # 修复 name_mapping 数据类型不匹配问题
                 # JSON 中存储为列表，但代码期望为元组
-                raw_name_mapping = last_stat["name_mapping"]
+                raw_name_mapping = cast(dict[str, object], last_stat["name_mapping"])
                 self.name_mapping = {}
                 for chat_id, value in raw_name_mapping.items():
                     if isinstance(value, list) and len(value) == 2:
@@ -596,8 +950,8 @@ class StatisticOutputTask(AsyncTask):
                         # 数据格式不正确，跳过或使用默认值
                         logger.warning(f"name_mapping 中 chat_id {chat_id} 的数据格式不正确: {value}")
                         continue
-                last_all_time_stat = last_stat["stat_data"]  # 上次完整统计的统计数据
-                last_stat_timestamp = datetime.fromtimestamp(last_stat["timestamp"])  # 上次完整统计数据的时间戳
+                last_all_time_stat = cast(dict[str, object], last_stat["stat_data"])  # 上次完整统计的统计数据
+                last_stat_timestamp = datetime.fromtimestamp(self._to_float_timestamp(last_stat["timestamp"]))
                 self.stat_period = [
                     item for item in self.stat_period if item[0] != "all_time"
                 ]  # 删除"所有时间"的统计时段
@@ -649,9 +1003,12 @@ class StatisticOutputTask(AsyncTask):
                     # 直接合并
                     stat["all_time"][key] += val
 
+        self._refresh_all_time_duration_stats(stat["all_time"])
+
         # 更新上次完整统计数据的时间戳
         # 将所有defaultdict转换为普通dict以避免类型冲突
         clean_stat_data = self._convert_defaultdict_to_dict(stat["all_time"])
+        self._drop_cached_time_cost_lists(clean_stat_data)
 
         # 将 name_mapping 中的元组转换为列表，因为JSON不支持元组
         json_safe_name_mapping = {}
@@ -664,9 +1021,70 @@ class StatisticOutputTask(AsyncTask):
             "timestamp": now.timestamp(),
         }
 
-        return stat
+        return cast(StatPeriodMapping, stat)
 
-    def _convert_defaultdict_to_dict(self, data):
+    def _refresh_all_time_duration_stats(self, stat_data: StatPeriodData) -> None:
+        """全量耗时均值/标准差从数据库现算，不依赖 local_store 中的原始耗时列表。"""
+        duration_stats: dict[str, defaultdict[str, dict[str, float]]] = {
+            "type": defaultdict(lambda: {"count": 0.0, "sum": 0.0, "sum_sq": 0.0}),
+            "user": defaultdict(lambda: {"count": 0.0, "sum": 0.0, "sum_sq": 0.0}),
+            "model": defaultdict(lambda: {"count": 0.0, "sum": 0.0, "sum_sq": 0.0}),
+            "module": defaultdict(lambda: {"count": 0.0, "sum": 0.0, "sum_sq": 0.0}),
+        }
+
+        records = fetch_model_usage_since(self.all_time_start_time)
+        for record in records:
+            time_cost = cast(float | None, record["time_cost"]) or 0.0
+            if time_cost <= 0:
+                continue
+
+            request_type = cast(str | None, record["request_type"]) or "unknown"
+            user_id = cast(str | None, record["model_api_provider_name"]) or "unknown"
+            model_assign_name = cast(str | None, record["model_assign_name"])
+            model_name = model_assign_name or cast(str | None, record["model_name"]) or "unknown"
+            module_name = request_type.split(".")[0] if "." in request_type else request_type
+
+            for category, item_name in [
+                ("type", request_type),
+                ("user", user_id),
+                ("model", model_name),
+                ("module", module_name),
+            ]:
+                item_stats = duration_stats[category][item_name]
+                item_stats["count"] += 1
+                item_stats["sum"] += time_cost
+                item_stats["sum_sq"] += time_cost * time_cost
+
+        for category, avg_key, std_key in [
+            ("type", AVG_TIME_COST_BY_TYPE, STD_TIME_COST_BY_TYPE),
+            ("user", AVG_TIME_COST_BY_USER, STD_TIME_COST_BY_USER),
+            ("model", AVG_TIME_COST_BY_MODEL, STD_TIME_COST_BY_MODEL),
+            ("module", AVG_TIME_COST_BY_MODULE, STD_TIME_COST_BY_MODULE),
+        ]:
+            avg_data = cast(defaultdict[str, float], stat_data[avg_key])
+            std_data = cast(defaultdict[str, float], stat_data[std_key])
+            avg_data.clear()
+            std_data.clear()
+
+            for item_name, item_stats in duration_stats[category].items():
+                count = item_stats["count"]
+                if count <= 0:
+                    continue
+                avg_time_cost = item_stats["sum"] / count
+                variance = max(item_stats["sum_sq"] / count - avg_time_cost * avg_time_cost, 0.0)
+                avg_data[item_name] = round(avg_time_cost, 3)
+                std_data[item_name] = round(variance**0.5, 3)
+
+    @staticmethod
+    def _drop_cached_time_cost_lists(stat_data: object) -> None:
+        """不把原始耗时列表写入 local_store；需要时从数据库重新统计。"""
+        if not isinstance(stat_data, dict):
+            return
+
+        for key in [TIME_COST_BY_TYPE, TIME_COST_BY_USER, TIME_COST_BY_MODEL, TIME_COST_BY_MODULE]:
+            stat_data.pop(key, None)
+
+    def _convert_defaultdict_to_dict(self, data: object) -> object:
         # sourcery skip: dict-comprehension, extract-duplicate-method, inline-immediately-returned-variable, merge-duplicate-blocks
         """递归转换defaultdict为普通dict"""
         if isinstance(data, defaultdict):
@@ -685,15 +1103,28 @@ class StatisticOutputTask(AsyncTask):
             # 其他类型直接返回
             return data
 
+    @staticmethod
+    def _to_float_timestamp(value: object) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return 0.0
+        return 0.0
+
     # -- 以下为统计数据格式化方法 --
 
     @staticmethod
-    def _format_total_stat(stats: Dict[str, Any]) -> str:
+    def _format_total_stat(stats: StatPeriodData) -> str:
         """
         格式化总统计数据
         """
         # 计算总token数（从所有模型的token数中累加）
         total_tokens = sum(stats[TOTAL_TOK_BY_MODEL].values()) if stats[TOTAL_TOK_BY_MODEL] else 0
+        cache_hit_tokens = cast(int, stats.get(CACHE_HIT_TOK, 0))
+        cache_miss_tokens = cast(int, stats.get(CACHE_MISS_TOK, 0))
 
         # 计算花费/消息数量指标（每100条）
         cost_per_100_messages = (stats[TOTAL_COST] / stats[TOTAL_MSG_CNT] * 100) if stats[TOTAL_MSG_CNT] > 0 else 0.0
@@ -718,11 +1149,13 @@ class StatisticOutputTask(AsyncTask):
         )
 
         output = [
-            f"总在线时间: {_format_online_time(stats[ONLINE_TIME])}",
+            f"总在线时间: {_format_online_time(int(stats[ONLINE_TIME]))}",
             f"总消息数: {_format_large_number(stats[TOTAL_MSG_CNT])}",
             f"总回复数: {_format_large_number(total_replies)}",
             f"总请求数: {_format_large_number(stats[TOTAL_REQ_CNT])}",
             f"总Token数: {_format_large_number(total_tokens)}",
+            f"Prompt缓存命中率: {_format_cache_hit_rate(cache_hit_tokens, cache_miss_tokens)}",
+            f"Prompt缓存命中Token: {_format_large_number(cache_hit_tokens)}",
             f"总花费: {stats[TOTAL_COST]:.2f}¥",
             f"花费/消息数量: {cost_per_100_messages:.4f}¥/100条" if stats[TOTAL_MSG_CNT] > 0 else "花费/消息数量: N/A",
             f"花费/接受消息数量: {cost_per_100_messages_excluding_replies:.4f}¥/100条"
@@ -737,19 +1170,19 @@ class StatisticOutputTask(AsyncTask):
         return "\n".join(output)
 
     @staticmethod
-    def _format_model_classified_stat(stats: Dict[str, Any]) -> str:
+    def _format_model_classified_stat(stats: StatPeriodData) -> str:
         """
         格式化按模型分类的统计数据
         """
         if stats[TOTAL_REQ_CNT] <= 0:
             return ""
-        data_fmt = "{:<32}  {:>10}  {:>12}  {:>12}  {:>12}  {:>9.2f}¥  {:>10.1f}  {:>10.1f}  {:>12}  {:>12}  {:>12}"
+        data_fmt = "{:<32}  {:>10}  {:>12}  {:>12}  {:>12}  {:>9.2f}¥  {:>10.1f}  {:>10.1f}  {:>12}  {:>12}  {:>12}  {:>12}"
 
         total_replies = stats.get(TOTAL_REPLY_CNT, 0)
 
         output = [
             "按模型分类统计:",
-            " 模型名称                          调用次数    输入Token     输出Token     Token总量     累计花费    平均耗时(秒)  标准差(秒)  每次回复平均调用次数  每次回复平均Token数  每次调用平均Token",
+            " 模型名称                          调用次数    输入Token     输出Token     Token总量     累计花费    平均耗时(秒)  标准差(秒)  每次回复平均调用次数  每次回复平均Token数  每次调用平均Token     缓存命中率",
         ]
         for model_name, count in sorted(stats[REQ_CNT_BY_MODEL].items()):
             name = f"{model_name[:29]}..." if len(model_name) > 32 else model_name
@@ -759,6 +1192,10 @@ class StatisticOutputTask(AsyncTask):
             cost = stats[COST_BY_MODEL][model_name]
             avg_time_cost = stats[AVG_TIME_COST_BY_MODEL][model_name]
             std_time_cost = stats[STD_TIME_COST_BY_MODEL][model_name]
+            cache_hit_rate = _format_cache_hit_rate(
+                stats[CACHE_HIT_TOK_BY_MODEL][model_name],
+                stats[CACHE_MISS_TOK_BY_MODEL][model_name],
+            )
 
             # 计算每次回复平均值
             avg_count_per_reply = count / total_replies if total_replies > 0 else 0.0
@@ -789,6 +1226,7 @@ class StatisticOutputTask(AsyncTask):
                     formatted_avg_count,
                     formatted_avg_tokens,
                     formatted_avg_tokens_per_call,
+                    cache_hit_rate,
                 )
             )
 
@@ -796,19 +1234,19 @@ class StatisticOutputTask(AsyncTask):
         return "\n".join(output)
 
     @staticmethod
-    def _format_module_classified_stat(stats: Dict[str, Any]) -> str:
+    def _format_module_classified_stat(stats: StatPeriodData) -> str:
         """
         格式化按模块分类的统计数据
         """
         if stats[TOTAL_REQ_CNT] <= 0:
             return ""
-        data_fmt = "{:<32}  {:>10}  {:>12}  {:>12}  {:>12}  {:>9.2f}¥  {:>10.1f}  {:>10.1f}  {:>12}  {:>12}  {:>12}"
+        data_fmt = "{:<32}  {:>10}  {:>12}  {:>12}  {:>12}  {:>9.2f}¥  {:>10.1f}  {:>10.1f}  {:>12}  {:>12}  {:>12}  {:>12}"
 
         total_replies = stats.get(TOTAL_REPLY_CNT, 0)
 
         output = [
             "按模块分类统计:",
-            " 模块名称                          调用次数    输入Token     输出Token     Token总量     累计花费    平均耗时(秒)  标准差(秒)  每次回复平均调用次数  每次回复平均Token数  每次调用平均Token",
+            " 模块名称                          调用次数    输入Token     输出Token     Token总量     累计花费    平均耗时(秒)  标准差(秒)  每次回复平均调用次数  每次回复平均Token数  每次调用平均Token     缓存命中率",
         ]
         for module_name, count in sorted(stats[REQ_CNT_BY_MODULE].items()):
             name = f"{module_name[:29]}..." if len(module_name) > 32 else module_name
@@ -818,6 +1256,10 @@ class StatisticOutputTask(AsyncTask):
             cost = stats[COST_BY_MODULE][module_name]
             avg_time_cost = stats[AVG_TIME_COST_BY_MODULE][module_name]
             std_time_cost = stats[STD_TIME_COST_BY_MODULE][module_name]
+            cache_hit_rate = _format_cache_hit_rate(
+                stats[CACHE_HIT_TOK_BY_MODULE][module_name],
+                stats[CACHE_MISS_TOK_BY_MODULE][module_name],
+            )
 
             # 计算每次回复平均值
             avg_count_per_reply = count / total_replies if total_replies > 0 else 0.0
@@ -848,13 +1290,14 @@ class StatisticOutputTask(AsyncTask):
                     formatted_avg_count,
                     formatted_avg_tokens,
                     formatted_avg_tokens_per_call,
+                    cache_hit_rate,
                 )
             )
 
         output.append("")
         return "\n".join(output)
 
-    def _format_chat_stat(self, stats: Dict[str, Any]) -> str:
+    def _format_chat_stat(self, stats: StatPeriodData) -> str:
         """
         格式化聊天统计数据
         """
@@ -877,20 +1320,12 @@ class StatisticOutputTask(AsyncTask):
         """从chat_id获取显示名称"""
         try:
             # 首先尝试从chat_stream获取真实群组名称
-            from src.chat.message_receive.chat_stream import get_chat_manager
+            from src.chat.message_receive.chat_manager import chat_manager as _stat_chat_manager
 
-            chat_manager = get_chat_manager()
-
-            if chat_id in chat_manager.streams:
-                stream = chat_manager.streams[chat_id]
-                if stream.group_info and hasattr(stream.group_info, "group_name"):
-                    group_name = stream.group_info.group_name
-                    if group_name and group_name.strip():
-                        return group_name.strip()
-                elif stream.user_info and hasattr(stream.user_info, "user_nickname"):
-                    user_name = stream.user_info.user_nickname
-                    if user_name and user_name.strip():
-                        return user_name.strip()
+            if chat_id in _stat_chat_manager.sessions:
+                name = _stat_chat_manager.get_session_name(chat_id)
+                if name and name.strip():
+                    return name.strip()
 
             # 如果从chat_stream获取失败，尝试解析chat_id格式
             if chat_id.startswith("g"):
@@ -905,7 +1340,7 @@ class StatisticOutputTask(AsyncTask):
 
     # 移除_generate_versions_tab方法
 
-    def _generate_html_report(self, stat: dict[str, Any], now: datetime):
+    def _generate_html_report(self, stat: StatPeriodMapping, now: datetime):
         """
         生成HTML格式的统计报告
         :param stat: 统计数据
@@ -921,7 +1356,7 @@ class StatisticOutputTask(AsyncTask):
         tab_list.append('<button class="tab-link" onclick="showTab(event, \'charts\')">数据图表</button>')
         tab_list.append('<button class="tab-link" onclick="showTab(event, \'metrics\')">指标趋势</button>')
 
-        def _format_stat_data(stat_data: dict[str, Any], div_id: str, start_time: datetime) -> str:
+        def _format_stat_data(stat_data: StatPeriodData, div_id: str, start_time: datetime) -> str:
             """
             格式化一个时间段的统计数据到html div块
             :param stat_data: 统计数据
@@ -932,6 +1367,8 @@ class StatisticOutputTask(AsyncTask):
 
             # 按模型分类统计
             total_replies = stat_data.get(TOTAL_REPLY_CNT, 0)
+            total_cache_hit_tokens = cast(int, stat_data.get(CACHE_HIT_TOK, 0))
+            total_cache_miss_tokens = cast(int, stat_data.get(CACHE_MISS_TOK, 0))
             model_rows = "\n".join(
                 [
                     f"<tr>"
@@ -940,6 +1377,9 @@ class StatisticOutputTask(AsyncTask):
                     f"<td>{_format_large_number(stat_data[IN_TOK_BY_MODEL][model_name], html=True)}</td>"
                     f"<td>{_format_large_number(stat_data[OUT_TOK_BY_MODEL][model_name], html=True)}</td>"
                     f"<td>{_format_large_number(stat_data[TOTAL_TOK_BY_MODEL][model_name], html=True)}</td>"
+                    f"<td>{_format_large_number(stat_data[CACHE_HIT_TOK_BY_MODEL][model_name], html=True)}</td>"
+                    f"<td>{_format_large_number(stat_data[CACHE_MISS_TOK_BY_MODEL][model_name], html=True)}</td>"
+                    f"<td>{_format_cache_hit_rate(stat_data[CACHE_HIT_TOK_BY_MODEL][model_name], stat_data[CACHE_MISS_TOK_BY_MODEL][model_name])}</td>"
                     f"<td>{stat_data[COST_BY_MODEL][model_name]:.2f} ¥</td>"
                     f"<td>{stat_data[AVG_TIME_COST_BY_MODEL][model_name]:.1f} 秒</td>"
                     f"<td>{stat_data[STD_TIME_COST_BY_MODEL][model_name]:.1f} 秒</td>"
@@ -950,7 +1390,7 @@ class StatisticOutputTask(AsyncTask):
                     for model_name, count in sorted(stat_data[REQ_CNT_BY_MODEL].items())
                 ]
                 if stat_data[REQ_CNT_BY_MODEL]
-                else ["<tr><td colspan='11' style='text-align: center; color: #999;'>暂无数据</td></tr>"]
+                else ["<tr><td colspan='14' style='text-align: center; color: #999;'>暂无数据</td></tr>"]
             )
             # 按请求类型分类统计
             type_rows = "\n".join(
@@ -961,6 +1401,9 @@ class StatisticOutputTask(AsyncTask):
                     f"<td>{_format_large_number(stat_data[IN_TOK_BY_TYPE][req_type], html=True)}</td>"
                     f"<td>{_format_large_number(stat_data[OUT_TOK_BY_TYPE][req_type], html=True)}</td>"
                     f"<td>{_format_large_number(stat_data[TOTAL_TOK_BY_TYPE][req_type], html=True)}</td>"
+                    f"<td>{_format_large_number(stat_data[CACHE_HIT_TOK_BY_TYPE][req_type], html=True)}</td>"
+                    f"<td>{_format_large_number(stat_data[CACHE_MISS_TOK_BY_TYPE][req_type], html=True)}</td>"
+                    f"<td>{_format_cache_hit_rate(stat_data[CACHE_HIT_TOK_BY_TYPE][req_type], stat_data[CACHE_MISS_TOK_BY_TYPE][req_type])}</td>"
                     f"<td>{stat_data[COST_BY_TYPE][req_type]:.2f} ¥</td>"
                     f"<td>{stat_data[AVG_TIME_COST_BY_TYPE][req_type]:.1f} 秒</td>"
                     f"<td>{stat_data[STD_TIME_COST_BY_TYPE][req_type]:.1f} 秒</td>"
@@ -971,7 +1414,7 @@ class StatisticOutputTask(AsyncTask):
                     for req_type, count in sorted(stat_data[REQ_CNT_BY_TYPE].items())
                 ]
                 if stat_data[REQ_CNT_BY_TYPE]
-                else ["<tr><td colspan='11' style='text-align: center; color: #999;'>暂无数据</td></tr>"]
+                else ["<tr><td colspan='14' style='text-align: center; color: #999;'>暂无数据</td></tr>"]
             )
             # 按模块分类统计
             module_rows = "\n".join(
@@ -982,6 +1425,9 @@ class StatisticOutputTask(AsyncTask):
                     f"<td>{_format_large_number(stat_data[IN_TOK_BY_MODULE][module_name], html=True)}</td>"
                     f"<td>{_format_large_number(stat_data[OUT_TOK_BY_MODULE][module_name], html=True)}</td>"
                     f"<td>{_format_large_number(stat_data[TOTAL_TOK_BY_MODULE][module_name], html=True)}</td>"
+                    f"<td>{_format_large_number(stat_data[CACHE_HIT_TOK_BY_MODULE][module_name], html=True)}</td>"
+                    f"<td>{_format_large_number(stat_data[CACHE_MISS_TOK_BY_MODULE][module_name], html=True)}</td>"
+                    f"<td>{_format_cache_hit_rate(stat_data[CACHE_HIT_TOK_BY_MODULE][module_name], stat_data[CACHE_MISS_TOK_BY_MODULE][module_name])}</td>"
                     f"<td>{stat_data[COST_BY_MODULE][module_name]:.2f} ¥</td>"
                     f"<td>{stat_data[AVG_TIME_COST_BY_MODULE][module_name]:.1f} 秒</td>"
                     f"<td>{stat_data[STD_TIME_COST_BY_MODULE][module_name]:.1f} 秒</td>"
@@ -992,15 +1438,19 @@ class StatisticOutputTask(AsyncTask):
                     for module_name, count in sorted(stat_data[REQ_CNT_BY_MODULE].items())
                 ]
                 if stat_data[REQ_CNT_BY_MODULE]
-                else ["<tr><td colspan='11' style='text-align: center; color: #999;'>暂无数据</td></tr>"]
+                else ["<tr><td colspan='14' style='text-align: center; color: #999;'>暂无数据</td></tr>"]
             )
 
             # 聊天消息统计
             chat_rows = []
+            sorted_chat_ids = sorted(stat_data[MSG_CNT_BY_CHAT].keys())
             for chat_id, count in sorted(stat_data[MSG_CNT_BY_CHAT].items()):
                 try:
                     chat_name = self.name_mapping.get(chat_id, ("未知聊天", 0))[0]
-                    chat_rows.append(f"<tr><td>{chat_name}</td><td>{_format_large_number(count, html=True)}</td></tr>")
+                    escaped_chat_name = escape(str(chat_name), quote=True)
+                    chat_rows.append(
+                        f"<tr><td>{escaped_chat_name}</td><td>{_format_large_number(count, html=True)}</td></tr>"
+                    )
                 except (IndexError, TypeError) as e:
                     logger.warning(f"生成HTML聊天统计时发生错误，chat_id: {chat_id}, 错误: {e}")
                     chat_rows.append(f"<tr><td>未知聊天</td><td>{_format_large_number(count, html=True)}</td></tr>")
@@ -1010,6 +1460,27 @@ class StatisticOutputTask(AsyncTask):
                 if chat_rows
                 else "<tr><td colspan='2' style='text-align: center; color: #999;'>暂无数据</td></tr>"
             )
+            chat_labels = [str(self.name_mapping.get(chat_id, ("未知聊天", 0))[0]) for chat_id in sorted_chat_ids]
+            chat_counts = [stat_data[MSG_CNT_BY_CHAT][chat_id] for chat_id in sorted_chat_ids]
+            chat_labels_json = _json_for_html_script(chat_labels)
+            chat_counts_json = _json_for_html_script(chat_counts)
+
+            sorted_chat_cost_ids = sorted(stat_data[COST_BY_CHAT].keys())
+            chat_cost_labels = [
+                "全局"
+                if chat_id == GLOBAL_COST_SESSION_KEY
+                else str(self.name_mapping.get(chat_id, (self._get_chat_display_name_from_id(chat_id), 0))[0])
+                for chat_id in sorted_chat_cost_ids
+            ]
+            chat_costs = [stat_data[COST_BY_CHAT][chat_id] for chat_id in sorted_chat_cost_ids]
+            chat_cost_labels_json = _json_for_html_script(chat_cost_labels)
+            chat_costs_json = _json_for_html_script(chat_costs)
+
+            owner_costs_by_label = _build_llm_owner_costs(stat_data[COST_BY_TYPE])
+            owner_cost_labels = list(owner_costs_by_label.keys())
+            owner_costs = [owner_costs_by_label[label] for label in owner_cost_labels]
+            owner_cost_labels_json = _json_for_html_script(owner_cost_labels)
+            owner_costs_json = _json_for_html_script(owner_costs)
             # 生成HTML
             return f"""
             <div id=\"{div_id}\" class=\"tab-content\">
@@ -1020,7 +1491,7 @@ class StatisticOutputTask(AsyncTask):
                 <div class=\"kpi-cards\">
                     <div class=\"kpi-card\">
                         <div class=\"kpi-title\">总在线时间</div>
-                        <div class=\"kpi-value\">{_format_online_time(stat_data[ONLINE_TIME])}</div>
+                        <div class=\"kpi-value\">{_format_online_time(int(stat_data[ONLINE_TIME]))}</div>
                     </div>
                     <div class=\"kpi-card\">
                         <div class=\"kpi-title\">总消息数</div>
@@ -1037,6 +1508,14 @@ class StatisticOutputTask(AsyncTask):
                     <div class=\"kpi-card\">
                         <div class=\"kpi-title\">总Token数</div>
                         <div class=\"kpi-value\">{_format_large_number(sum(stat_data[TOTAL_TOK_BY_MODEL].values()) if stat_data[TOTAL_TOK_BY_MODEL] else 0, html=True)}</div>
+                    </div>
+                    <div class=\"kpi-card\">
+                        <div class=\"kpi-title\">Prompt缓存命中率</div>
+                        <div class=\"kpi-value\">{_format_cache_hit_rate(total_cache_hit_tokens, total_cache_miss_tokens)}</div>
+                    </div>
+                    <div class=\"kpi-card\">
+                        <div class=\"kpi-title\">Prompt缓存命中Token</div>
+                        <div class=\"kpi-value\">{_format_large_number(total_cache_hit_tokens, html=True)}</div>
                     </div>
                     <div class=\"kpi-card\">
                         <div class=\"kpi-title\">总花费</div>
@@ -1067,7 +1546,7 @@ class StatisticOutputTask(AsyncTask):
                 <h2>按模型分类统计</h2>
                 <div class=\"table-wrap\">
                     <table>
-                        <thead><tr><th>模型名称</th><th>调用次数</th><th>输入Token</th><th>输出Token</th><th>Token总量</th><th>累计花费</th><th>平均耗时(秒)</th><th>标准差(秒)</th><th>每次回复平均调用次数</th><th>每次回复平均Token数</th><th>每次调用平均Token</th></tr></thead>
+                        <thead><tr><th>模型名称</th><th>调用次数</th><th>输入Token</th><th>输出Token</th><th>Token总量</th><th>缓存命中Token</th><th>缓存未命中Token</th><th>缓存命中率</th><th>累计花费</th><th>平均耗时(秒)</th><th>标准差(秒)</th><th>每次回复平均调用次数</th><th>每次回复平均Token数</th><th>每次调用平均Token</th></tr></thead>
                         <tbody>
                             {model_rows}
                         </tbody>
@@ -1078,7 +1557,7 @@ class StatisticOutputTask(AsyncTask):
                 <div class=\"table-wrap\">
                     <table>
                         <thead>
-                            <tr><th>模块名称</th><th>调用次数</th><th>输入Token</th><th>输出Token</th><th>Token总量</th><th>累计花费</th><th>平均耗时(秒)</th><th>标准差(秒)</th><th>每次回复平均调用次数</th><th>每次回复平均Token数</th><th>每次调用平均Token</th></tr>
+                            <tr><th>模块名称</th><th>调用次数</th><th>输入Token</th><th>输出Token</th><th>Token总量</th><th>缓存命中Token</th><th>缓存未命中Token</th><th>缓存命中率</th><th>累计花费</th><th>平均耗时(秒)</th><th>标准差(秒)</th><th>每次回复平均调用次数</th><th>每次回复平均Token数</th><th>每次调用平均Token</th></tr>
                         </thead>
                         <tbody>
                         {module_rows}
@@ -1090,7 +1569,7 @@ class StatisticOutputTask(AsyncTask):
                 <div class=\"table-wrap\">
                     <table>
                         <thead>
-                            <tr><th>请求类型</th><th>调用次数</th><th>输入Token</th><th>输出Token</th><th>Token总量</th><th>累计花费</th><th>平均耗时(秒)</th><th>标准差(秒)</th><th>每次回复平均调用次数</th><th>每次回复平均Token数</th><th>每次调用平均Token</th></tr>
+                            <tr><th>请求类型</th><th>调用次数</th><th>输入Token</th><th>输出Token</th><th>Token总量</th><th>缓存命中Token</th><th>缓存未命中Token</th><th>缓存命中率</th><th>累计花费</th><th>平均耗时(秒)</th><th>标准差(秒)</th><th>每次回复平均调用次数</th><th>每次回复平均Token数</th><th>每次调用平均Token</th></tr>
                         </thead>
                         <tbody>
                         {type_rows}
@@ -1111,22 +1590,48 @@ class StatisticOutputTask(AsyncTask):
                 </div>
                 
                 <h2>数据分布图表</h2>
-                <div style="display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px;">
-                    <div style="flex: 1; min-width: 300px;">
+                <div class="pie-chart-grid">
+                    <div class="pie-chart-card">
+                        <h3>调用来源花费分布</h3>
+                        <div class="pie-chart-canvas-wrap">
+                            <canvas id="ownerPieChart_{div_id}"></canvas>
+                        </div>
+                        <div id="ownerPieLegend_{div_id}" class="pie-chart-legend"></div>
+                    </div>
+                    <div class="pie-chart-card">
                         <h3>模型花费分布</h3>
-                        <canvas id="modelPieChart_{div_id}" width="300" height="300"></canvas>
+                        <div class="pie-chart-canvas-wrap">
+                            <canvas id="modelPieChart_{div_id}"></canvas>
+                        </div>
+                        <div id="modelPieLegend_{div_id}" class="pie-chart-legend"></div>
                     </div>
-                    <div style="flex: 1; min-width: 300px;">
+                    <div class="pie-chart-card">
                         <h3>模块花费分布</h3>
-                        <canvas id="modulePieChart_{div_id}" width="300" height="300"></canvas>
+                        <div class="pie-chart-canvas-wrap">
+                            <canvas id="modulePieChart_{div_id}"></canvas>
+                        </div>
+                        <div id="modulePieLegend_{div_id}" class="pie-chart-legend"></div>
                     </div>
-                    <div style="flex: 1; min-width: 300px;">
+                    <div class="pie-chart-card">
                         <h3>请求类型花费分布</h3>
-                        <canvas id="typePieChart_{div_id}" width="300" height="300"></canvas>
+                        <div class="pie-chart-canvas-wrap">
+                            <canvas id="typePieChart_{div_id}"></canvas>
+                        </div>
+                        <div id="typePieLegend_{div_id}" class="pie-chart-legend"></div>
                     </div>
-                    <div style="flex: 1; min-width: 300px;">
+                    <div class="pie-chart-card">
                         <h3>聊天消息分布</h3>
-                        <canvas id="chatPieChart_{div_id}" width="300" height="300"></canvas>
+                        <div class="pie-chart-canvas-wrap">
+                            <canvas id="chatPieChart_{div_id}"></canvas>
+                        </div>
+                        <div id="chatPieLegend_{div_id}" class="pie-chart-legend"></div>
+                    </div>
+                    <div class="pie-chart-card">
+                        <h3>聊天流花费分布</h3>
+                        <div class="pie-chart-canvas-wrap">
+                            <canvas id="chatCostPieChart_{div_id}"></canvas>
+                        </div>
+                        <div id="chatCostPieLegend_{div_id}" class="pie-chart-legend"></div>
                     </div>
                 </div>
                 
@@ -1137,8 +1642,89 @@ class StatisticOutputTask(AsyncTask):
                     }});
                     
                     function createPieCharts_{div_id}() {{
-                        const colors = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#34495e', '#e67e22', '#95a5a6', '#f1c40f'];
-                        
+                        const colors = ['#b35b34', '#0d4b50', '#cfa54b', '#6f665b', '#dfc79a', '#8f4b38', '#74825a', '#854f46', '#2f5f62', '#b98556'];
+
+                        function getPieColors(labelCount) {{
+                            return Array.from({{ length: labelCount }}, (_, index) => colors[index % colors.length]);
+                        }}
+
+                        function renderPieLegend_{div_id}(chart, legendId) {{
+                            const legendContainer = document.getElementById(legendId);
+                            if (!legendContainer) return;
+
+                            legendContainer.innerHTML = '';
+                            const items = chart.options.plugins.legend.labels.generateLabels(chart);
+                            items.forEach((item) => {{
+                                const legendItem = document.createElement('button');
+                                legendItem.type = 'button';
+                                legendItem.className = 'pie-chart-legend-item' + (item.hidden ? ' is-hidden' : '');
+                                legendItem.onclick = () => {{
+                                    chart.toggleDataVisibility(item.index);
+                                    chart.update();
+                                    renderPieLegend_{div_id}(chart, legendId);
+                                }};
+
+                                const colorBox = document.createElement('span');
+                                colorBox.className = 'pie-chart-legend-color';
+                                colorBox.style.backgroundColor = item.fillStyle;
+
+                                const labelText = document.createElement('span');
+                                labelText.className = 'pie-chart-legend-label';
+                                labelText.textContent = item.text;
+
+                                legendItem.appendChild(colorBox);
+                                legendItem.appendChild(labelText);
+                                legendContainer.appendChild(legendItem);
+                            }});
+                        }}
+
+                        function createPieChart_{div_id}(canvasId, legendId, chartData, labelFormatter) {{
+                            const chart = new Chart(document.getElementById(canvasId), {{
+                                type: 'pie',
+                                data: chartData,
+                                options: {{
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    plugins: {{
+                                        legend: {{
+                                            display: false
+                                        }},
+                                        tooltip: {{
+                                            callbacks: {{
+                                                label: labelFormatter
+                                            }}
+                                        }}
+                                    }}
+                                }}
+                            }});
+                            renderPieLegend_{div_id}(chart, legendId);
+                            return chart;
+                        }}
+
+                        // 调用来源花费分布饼图
+                        const ownerLabels = {owner_cost_labels_json};
+                        if (ownerLabels.length > 0) {{
+                            const ownerData = {{
+                                labels: ownerLabels,
+                                datasets: [{{
+                                    data: {owner_costs_json},
+                                    backgroundColor: getPieColors(ownerLabels.length),
+                                    borderColor: getPieColors(ownerLabels.length),
+                                    borderWidth: 2
+                                }}]
+                            }};
+
+                            createPieChart_{div_id}('ownerPieChart_{div_id}', 'ownerPieLegend_{div_id}', ownerData, function(context) {{
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = ((context.parsed / total) * 100).toFixed(1);
+                                return context.label + ': ¥' + context.parsed.toFixed(2) + ' (' + percentage + '%)';
+                            }});
+                        }} else {{
+                            document.getElementById('ownerPieChart_{div_id}').style.display = 'none';
+                            document.getElementById('ownerPieLegend_{div_id}').style.display = 'none';
+                            document.querySelector('#ownerPieChart_{div_id}').closest('.pie-chart-card').querySelector('h3').textContent = '调用来源花费分布 (无数据)';
+                        }}
+
                         // 模型花费分布饼图
                         const modelLabels = {list(sorted(stat_data[COST_BY_MODEL].keys())) if stat_data[COST_BY_MODEL] else []};
                         if (modelLabels.length > 0) {{
@@ -1146,36 +1732,21 @@ class StatisticOutputTask(AsyncTask):
                                 labels: modelLabels,
                                 datasets: [{{
                                     data: {[stat_data[COST_BY_MODEL][model_name] for model_name in sorted(stat_data[COST_BY_MODEL].keys())] if stat_data[COST_BY_MODEL] else []},
-                                    backgroundColor: colors.slice(0, {len(stat_data[COST_BY_MODEL]) if stat_data[COST_BY_MODEL] else 0}),
-                                    borderColor: colors.slice(0, {len(stat_data[COST_BY_MODEL]) if stat_data[COST_BY_MODEL] else 0}),
+                                    backgroundColor: getPieColors(modelLabels.length),
+                                    borderColor: getPieColors(modelLabels.length),
                                     borderWidth: 2
                                 }}]
                             }};
-                            
-                            new Chart(document.getElementById('modelPieChart_{div_id}'), {{
-                                type: 'pie',
-                                data: modelData,
-                                options: {{
-                                    responsive: true,
-                                    plugins: {{
-                                        legend: {{
-                                            position: 'bottom'
-                                        }},
-                                        tooltip: {{
-                                            callbacks: {{
-                                                label: function(context) {{
-                                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                                                    const percentage = ((context.parsed / total) * 100).toFixed(1);
-                                                    return context.label + ': ¥' + context.parsed.toFixed(2) + ' (' + percentage + '%)';
-                                                }}
-                                            }}
-                                        }}
-                                    }}
-                                }}
+
+                            createPieChart_{div_id}('modelPieChart_{div_id}', 'modelPieLegend_{div_id}', modelData, function(context) {{
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = ((context.parsed / total) * 100).toFixed(1);
+                                return context.label + ': ¥' + context.parsed.toFixed(2) + ' (' + percentage + '%)';
                             }});
                         }} else {{
                             document.getElementById('modelPieChart_{div_id}').style.display = 'none';
-                            document.querySelector('#modelPieChart_{div_id}').parentElement.querySelector('h3').textContent = '模型花费分布 (无数据)';
+                            document.getElementById('modelPieLegend_{div_id}').style.display = 'none';
+                            document.querySelector('#modelPieChart_{div_id}').closest('.pie-chart-card').querySelector('h3').textContent = '模型花费分布 (无数据)';
                         }}
                         
                         // 模块花费分布饼图
@@ -1185,36 +1756,21 @@ class StatisticOutputTask(AsyncTask):
                                 labels: moduleLabels,
                                 datasets: [{{
                                     data: {[stat_data[COST_BY_MODULE][module_name] for module_name in sorted(stat_data[COST_BY_MODULE].keys())] if stat_data[COST_BY_MODULE] else []},
-                                    backgroundColor: colors.slice(0, {len(stat_data[COST_BY_MODULE]) if stat_data[COST_BY_MODULE] else 0}),
-                                    borderColor: colors.slice(0, {len(stat_data[COST_BY_MODULE]) if stat_data[COST_BY_MODULE] else 0}),
+                                    backgroundColor: getPieColors(moduleLabels.length),
+                                    borderColor: getPieColors(moduleLabels.length),
                                     borderWidth: 2
                                 }}]
                             }};
                             
-                            new Chart(document.getElementById('modulePieChart_{div_id}'), {{
-                                type: 'pie',
-                                data: moduleData,
-                                options: {{
-                                    responsive: true,
-                                    plugins: {{
-                                        legend: {{
-                                            position: 'bottom'
-                                        }},
-                                        tooltip: {{
-                                            callbacks: {{
-                                                label: function(context) {{
-                                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                                                    const percentage = ((context.parsed / total) * 100).toFixed(1);
-                                                    return context.label + ': ¥' + context.parsed.toFixed(2) + ' (' + percentage + '%)';
-                                                }}
-                                            }}
-                                        }}
-                                    }}
-                                }}
+                            createPieChart_{div_id}('modulePieChart_{div_id}', 'modulePieLegend_{div_id}', moduleData, function(context) {{
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = ((context.parsed / total) * 100).toFixed(1);
+                                return context.label + ': ¥' + context.parsed.toFixed(2) + ' (' + percentage + '%)';
                             }});
                         }} else {{
                             document.getElementById('modulePieChart_{div_id}').style.display = 'none';
-                            document.querySelector('#modulePieChart_{div_id}').parentElement.querySelector('h3').textContent = '模块花费分布 (无数据)';
+                            document.getElementById('modulePieLegend_{div_id}').style.display = 'none';
+                            document.querySelector('#modulePieChart_{div_id}').closest('.pie-chart-card').querySelector('h3').textContent = '模块花费分布 (无数据)';
                         }}
                         
                         // 请求类型花费分布饼图
@@ -1224,75 +1780,69 @@ class StatisticOutputTask(AsyncTask):
                                 labels: typeLabels,
                                 datasets: [{{
                                     data: {[stat_data[COST_BY_TYPE][req_type] for req_type in sorted(stat_data[COST_BY_TYPE].keys())] if stat_data[COST_BY_TYPE] else []},
-                                    backgroundColor: colors.slice(0, {len(stat_data[COST_BY_TYPE]) if stat_data[COST_BY_TYPE] else 0}),
-                                    borderColor: colors.slice(0, {len(stat_data[COST_BY_TYPE]) if stat_data[COST_BY_TYPE] else 0}),
+                                    backgroundColor: getPieColors(typeLabels.length),
+                                    borderColor: getPieColors(typeLabels.length),
                                     borderWidth: 2
                                 }}]
                             }};
                             
-                            new Chart(document.getElementById('typePieChart_{div_id}'), {{
-                                type: 'pie',
-                                data: typeData,
-                                options: {{
-                                    responsive: true,
-                                    plugins: {{
-                                        legend: {{
-                                            position: 'bottom'
-                                        }},
-                                        tooltip: {{
-                                            callbacks: {{
-                                                label: function(context) {{
-                                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                                                    const percentage = ((context.parsed / total) * 100).toFixed(1);
-                                                    return context.label + ': ¥' + context.parsed.toFixed(2) + ' (' + percentage + '%)';
-                                                }}
-                                            }}
-                                        }}
-                                    }}
-                                }}
+                            createPieChart_{div_id}('typePieChart_{div_id}', 'typePieLegend_{div_id}', typeData, function(context) {{
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = ((context.parsed / total) * 100).toFixed(1);
+                                return context.label + ': ¥' + context.parsed.toFixed(2) + ' (' + percentage + '%)';
                             }});
                         }} else {{
                             document.getElementById('typePieChart_{div_id}').style.display = 'none';
-                            document.querySelector('#typePieChart_{div_id}').parentElement.querySelector('h3').textContent = '请求类型花费分布 (无数据)';
+                            document.getElementById('typePieLegend_{div_id}').style.display = 'none';
+                            document.querySelector('#typePieChart_{div_id}').closest('.pie-chart-card').querySelector('h3').textContent = '请求类型花费分布 (无数据)';
                         }}
                         
                         // 聊天消息分布饼图
-                        const chatLabels = {[self.name_mapping.get(chat_id, ("未知聊天", 0))[0] for chat_id in sorted(stat_data[MSG_CNT_BY_CHAT].keys())] if stat_data[MSG_CNT_BY_CHAT] else []};
+                        const chatLabels = {chat_labels_json};
                         if (chatLabels.length > 0) {{
                             const chatData = {{
                                 labels: chatLabels,
                                 datasets: [{{
-                                    data: {[stat_data[MSG_CNT_BY_CHAT][chat_id] for chat_id in sorted(stat_data[MSG_CNT_BY_CHAT].keys())] if stat_data[MSG_CNT_BY_CHAT] else []},
-                                    backgroundColor: colors.slice(0, {len(stat_data[MSG_CNT_BY_CHAT]) if stat_data[MSG_CNT_BY_CHAT] else 0}),
-                                    borderColor: colors.slice(0, {len(stat_data[MSG_CNT_BY_CHAT]) if stat_data[MSG_CNT_BY_CHAT] else 0}),
+                                    data: {chat_counts_json},
+                                    backgroundColor: getPieColors(chatLabels.length),
+                                    borderColor: getPieColors(chatLabels.length),
                                     borderWidth: 2
                                 }}]
                             }};
                             
-                            new Chart(document.getElementById('chatPieChart_{div_id}'), {{
-                                type: 'pie',
-                                data: chatData,
-                                options: {{
-                                    responsive: true,
-                                    plugins: {{
-                                        legend: {{
-                                            position: 'bottom'
-                                        }},
-                                        tooltip: {{
-                                            callbacks: {{
-                                                label: function(context) {{
-                                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                                                    const percentage = ((context.parsed / total) * 100).toFixed(1);
-                                                    return context.label + ': ' + context.parsed + ' (' + percentage + '%)';
-                                                }}
-                                            }}
-                                        }}
-                                    }}
-                                }}
+                            createPieChart_{div_id}('chatPieChart_{div_id}', 'chatPieLegend_{div_id}', chatData, function(context) {{
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = ((context.parsed / total) * 100).toFixed(1);
+                                return context.label + ': ' + context.parsed + ' (' + percentage + '%)';
                             }});
                         }} else {{
                             document.getElementById('chatPieChart_{div_id}').style.display = 'none';
-                            document.querySelector('#chatPieChart_{div_id}').parentElement.querySelector('h3').textContent = '聊天消息分布 (无数据)';
+                            document.getElementById('chatPieLegend_{div_id}').style.display = 'none';
+                            document.querySelector('#chatPieChart_{div_id}').closest('.pie-chart-card').querySelector('h3').textContent = '聊天消息分布 (无数据)';
+                        }}
+
+                        // 聊天流花费分布饼图
+                        const chatCostLabels = {chat_cost_labels_json};
+                        if (chatCostLabels.length > 0) {{
+                            const chatCostData = {{
+                                labels: chatCostLabels,
+                                datasets: [{{
+                                    data: {chat_costs_json},
+                                    backgroundColor: getPieColors(chatCostLabels.length),
+                                    borderColor: getPieColors(chatCostLabels.length),
+                                    borderWidth: 2
+                                }}]
+                            }};
+
+                            createPieChart_{div_id}('chatCostPieChart_{div_id}', 'chatCostPieLegend_{div_id}', chatCostData, function(context) {{
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = ((context.parsed / total) * 100).toFixed(1);
+                                return context.label + ': ¥' + context.parsed.toFixed(2) + ' (' + percentage + '%)';
+                            }});
+                        }} else {{
+                            document.getElementById('chatCostPieChart_{div_id}').style.display = 'none';
+                            document.getElementById('chatCostPieLegend_{div_id}').style.display = 'none';
+                            document.querySelector('#chatCostPieChart_{div_id}').closest('.pie-chart-card').querySelector('h3').textContent = '聊天流花费分布 (无数据)';
                         }}
                     }}
                 </script>
@@ -1307,7 +1857,11 @@ class StatisticOutputTask(AsyncTask):
         ]
 
         tab_content_list.append(
-            _format_stat_data(stat["all_time"], "all_time", datetime.fromtimestamp(local_storage["deploy_time"]))  # type: ignore
+            _format_stat_data(
+                stat["all_time"],
+                "all_time",
+                self.all_time_start_time,
+            )
         )
 
         # 不再添加版本对比内容
@@ -1332,28 +1886,57 @@ class StatisticOutputTask(AsyncTask):
     <title>MaiBot运行统计报告</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
+        :root {
+            --statistics-background: hsl(35.4 61.9% 87.6%);
+            --statistics-foreground: hsl(189 72% 18.2%);
+            --statistics-card: hsl(36 66% 89.6%);
+            --statistics-card-strong: hsl(34.1 54.8% 81.8%);
+            --statistics-muted: hsl(34.9 48.3% 82.5%);
+            --statistics-muted-foreground: hsl(39.1 11.6% 39%);
+            --statistics-primary: hsl(15.6 68.7% 45.1%);
+            --statistics-primary-foreground: hsl(39.5 100% 92%);
+            --statistics-accent: hsl(34.7 45.6% 75.5%);
+            --statistics-border: hsl(188.1 74% 19.6%);
+            --statistics-ring: hsl(15.6 68.7% 45.1%);
+            --statistics-row-alt: hsl(34.1 54.8% 81.8% / 0.42);
+        }
+
+        html {
+            box-sizing: border-box;
+        }
+
+        *, *::before, *::after {
+            box-sizing: inherit;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-family: "Bahnschrift Condensed", "Agency FB", "Arial Narrow", "Microsoft YaHei UI", system-ui, sans-serif;
             margin: 0;
             padding: 20px;
-            background-color: #faf7ff;
-            color: #3a2f57;
+            background:
+                linear-gradient(90deg, hsl(188.1 74% 19.6% / 0.05) 1px, transparent 1px),
+                linear-gradient(0deg, hsl(188.1 74% 19.6% / 0.04) 1px, transparent 1px),
+                var(--statistics-background);
+            background-size: 28px 28px;
+            color: var(--statistics-foreground);
             line-height: 1.6;
         }
         .container {
-            max-width: 900px;
+            width: 100%;
+            max-width: none;
             margin: 20px auto;
-            background-color: #ffffff;
+            background-color: hsl(36 66% 89.6% / 0.94);
             padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 10px 28px rgba(122, 98, 182, 0.12);
-            border: 1px solid #e5dcff;
+            border-radius: 4px;
+            box-shadow: none;
+            border: 2px solid var(--statistics-border);
         }
         h1, h2 {
-            color: #473673;
-            border-bottom: 2px solid #9f8efb;
+            color: var(--statistics-foreground);
+            border-bottom: 2px solid var(--statistics-border);
             padding-bottom: 10px;
             margin-top: 0;
+            letter-spacing: 0;
         }
         h1 {
             text-align: center;
@@ -1367,39 +1950,40 @@ class StatisticOutputTask(AsyncTask):
             margin-bottom: 10px;
         }
         .info-item {
-            background-color: #f3eeff;
+            background-color: var(--statistics-muted);
             padding: 8px 12px;
-            border-radius: 6px;
+            border: 1px solid var(--statistics-border);
+            border-radius: 3px;
             margin-bottom: 8px;
             font-size: 0.95em;
         }
         .info-item strong {
-            color: #7162bf;
+            color: var(--statistics-primary);
         }
         /* 新增：顶部工具条与按钮 */
-        .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+        .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
         .toolbar .right { display: flex; gap: 8px; align-items: center; }
         .btn {
-            border: 1px solid #e3daff;
-            background-color: #fbf9ff;
-            color: #4a3c75;
+            border: 1px solid var(--statistics-border);
+            background-color: var(--statistics-card);
+            color: var(--statistics-foreground);
             padding: 8px 12px;
-            border-radius: 6px;
+            border-radius: 3px;
             cursor: pointer;
             transition: all .2s ease;
         }
-        .btn:hover { border-color: #9f8efb; color: #7c6bcf; background-color: #f1ecff; }
+        .btn:hover { border-color: var(--statistics-ring); color: var(--statistics-primary); background-color: var(--statistics-accent); }
         /* 新增：KPI 卡片 */
-        .kpi-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 12px 0 6px; }
+        .kpi-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 12px 0 6px; }
         .kpi-card {
-            background: linear-gradient(145deg, #ffffff 0%, #f6f2ff 100%);
-            border: 1px solid #e3dbff;
-            border-radius: 10px;
+            background: var(--statistics-card);
+            border: 2px solid var(--statistics-border);
+            border-radius: 4px;
             padding: 14px 16px;
-            box-shadow: 0 6px 16px rgba(113, 98, 191, 0.1);
+            box-shadow: none;
         }
-        .kpi-title { font-size: 12px; color: #8579a6; letter-spacing: .3px; margin-bottom: 6px; }
-        .kpi-value { font-size: 20px; font-weight: 700; letter-spacing: .2px; color: #8b5cf6; }
+        .kpi-title { font-size: 12px; color: var(--statistics-muted-foreground); letter-spacing: 0; margin-bottom: 6px; }
+        .kpi-value { font-size: 20px; font-weight: 800; letter-spacing: 0; color: var(--statistics-primary); }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -1407,60 +1991,147 @@ class StatisticOutputTask(AsyncTask):
             font-size: 0.9em;
         }
         /* 新增：表格包裹容器，支持横向滚动 */
-        .table-wrap { width: 100%; overflow-x: auto; border-radius: 6px; }
+        .table-wrap { width: 100%; overflow-x: auto; border-radius: 3px; border: 1px solid var(--statistics-border); }
         th, td {
-            border: 1px solid #e6ddff;
+            border: 1px solid hsl(188.1 74% 19.6% / 0.35);
             padding: 10px;
             text-align: left;
         }
         th {
-            background-color: #9f8efb;
-            color: white;
+            background-color: var(--statistics-border);
+            color: var(--statistics-primary-foreground);
             font-weight: bold;
             position: sticky;
             top: 0;
             z-index: 1;
         }
         tr:nth-child(even) {
-            background-color: #f6f1ff;
+            background-color: var(--statistics-row-alt);
         }
         .footer {
             text-align: center;
             margin-top: 30px;
             font-size: 0.8em;
-            color: #7f8c8d;
+            color: var(--statistics-muted-foreground);
         }
         .tabs {
             overflow: hidden;
-            background: #f9f6ff;
+            background: var(--statistics-card-strong);
             display: flex;
-            border: 1px solid #e4dcff;
-            border-radius: 10px;
-            box-shadow: 0 8px 18px rgba(120, 101, 179, 0.08);
+            flex-wrap: wrap;
+            border: 2px solid var(--statistics-border);
+            border-radius: 4px;
+            box-shadow: none;
         }
         .tabs button {
             background: inherit; border: none; outline: none;
             padding: 12px 14px; cursor: pointer;
             transition: 0.2s; font-size: 15px;
-            color: #52467a;
+            color: var(--statistics-foreground);
         }
         .tabs button:hover {
-            background-color: #efe9ff;
+            background-color: var(--statistics-accent);
         }
         .tabs button.active {
-            background-color: rgba(159, 142, 251, 0.25);
-            color: #6253a9;
+            background-color: var(--statistics-primary);
+            color: var(--statistics-primary-foreground);
         }
         .tab-content {
             display: none;
             padding: 20px;
-            background-color: #fefcff;
-            border: 1px solid #e4dcff;
+            background-color: hsl(36 66% 89.6% / 0.76);
+            border: 2px solid var(--statistics-border);
             border-top: none;
-            border-radius: 0 0 10px 10px;
+            border-radius: 0 0 4px 4px;
         }
         .tab-content.active {
             display: block;
+        }
+        canvas {
+            max-width: 100%;
+        }
+        .pie-chart-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+            align-items: stretch;
+        }
+        .pie-chart-card {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 12px;
+            padding: 14px;
+            border: 1px solid var(--statistics-border);
+            border-radius: 4px;
+            background: hsl(36 66% 89.6% / 0.55);
+        }
+        .pie-chart-card h3 {
+            margin: 0;
+            min-height: 1.6em;
+            color: var(--statistics-foreground);
+            font-size: 1.1em;
+        }
+        .pie-chart-canvas-wrap {
+            width: 100%;
+            height: 450px;
+            min-height: 450px;
+        }
+        .pie-chart-canvas-wrap canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        .pie-chart-legend {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px 10px;
+            max-height: 128px;
+            min-height: 44px;
+            overflow-y: auto;
+            padding: 8px;
+            border: 1px solid hsl(188.1 74% 19.6% / 0.35);
+            border-radius: 3px;
+            background: hsl(34.9 48.3% 82.5% / 0.5);
+        }
+        .pie-chart-legend-item {
+            display: grid;
+            grid-template-columns: 12px minmax(0, 1fr);
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+            padding: 3px 4px;
+            border: 0;
+            background: transparent;
+            color: var(--statistics-foreground);
+            cursor: pointer;
+            font: inherit;
+            line-height: 1.25;
+            text-align: left;
+        }
+        .pie-chart-legend-item.is-hidden {
+            opacity: 0.45;
+            text-decoration: line-through;
+        }
+        .pie-chart-legend-color {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            border: 1px solid hsl(188.1 74% 19.6% / 0.25);
+        }
+        .pie-chart-legend-label {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        @media (max-width: 760px) {
+            .pie-chart-grid {
+                grid-template-columns: 1fr;
+            }
+            .pie-chart-legend {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -1504,13 +2175,17 @@ class StatisticOutputTask(AsyncTask):
         """
         )
 
-        with open(self.record_file_path, "w", encoding="utf-8") as f:
+        record_file = Path(self.record_file_path)
+        if record_file.parent != Path("."):
+            record_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(record_file, "w", encoding="utf-8") as f:
             f.write(html_template)
 
-    def _generate_chart_data(self, stat: dict[str, Any]) -> dict:
+    def _generate_chart_data(self, stat: StatPeriodMapping) -> dict[str, dict[str, object]]:
         """生成图表数据"""
         now = datetime.now()
-        chart_data = {}
+        chart_data: dict[str, dict[str, object]] = {}
 
         # 支持多个时间范围
         time_ranges = [
@@ -1526,7 +2201,7 @@ class StatisticOutputTask(AsyncTask):
 
         return chart_data
 
-    def _collect_interval_data(self, now: datetime, hours: int, interval_minutes: int) -> dict:
+    def _collect_interval_data(self, now: datetime, hours: int, interval_minutes: int) -> dict[str, object]:
         """收集指定时间范围内每个间隔的数据"""
         # 生成时间点
         start_time = now - timedelta(hours=hours)
@@ -1538,18 +2213,19 @@ class StatisticOutputTask(AsyncTask):
             current_time += timedelta(minutes=interval_minutes)
 
         # 初始化数据结构
-        total_cost_data = [0] * len(time_points)
-        cost_by_model = {}
-        cost_by_module = {}
-        message_by_chat = {}
+        total_cost_data: list[float] = [0.0] * len(time_points)
+        cost_by_model: dict[str, list[float]] = {}
+        cost_by_module: dict[str, list[float]] = {}
+        message_by_chat: dict[str, list[int]] = {}
         time_labels = [t.strftime("%H:%M") for t in time_points]
 
         interval_seconds = interval_minutes * 60
 
         # 查询LLM使用记录
         query_start_time = start_time
-        for record in LLMUsage.select().where(LLMUsage.timestamp >= query_start_time):  # type: ignore
-            record_time = record.timestamp
+        records = fetch_model_usage_since(query_start_time)
+        for record in records:
+            record_time = cast(datetime, record["timestamp"])
 
             # 找到对应的时间间隔索引
             time_diff = (record_time - start_time).total_seconds()
@@ -1557,26 +2233,28 @@ class StatisticOutputTask(AsyncTask):
 
             if 0 <= interval_index < len(time_points):
                 # 累加总花费数据
-                cost = record.cost or 0.0
-                total_cost_data[interval_index] += cost  # type: ignore
+                cost = cast(float | None, record["cost"]) or 0.0
+                total_cost_data[interval_index] += cost
 
                 # 累加按模型分类的花费
-                model_name = record.model_assign_name or record.model_name or "unknown"
+                model_assign_name = cast(str | None, record["model_assign_name"])
+                model_name = model_assign_name or cast(str | None, record["model_name"]) or "unknown"
                 if model_name not in cost_by_model:
-                    cost_by_model[model_name] = [0] * len(time_points)
+                    cost_by_model[model_name] = [0.0] * len(time_points)
                 cost_by_model[model_name][interval_index] += cost
 
                 # 累加按模块分类的花费
-                request_type = record.request_type or "unknown"
+                request_type = cast(str | None, record["request_type"]) or "unknown"
                 module_name = request_type.split(".")[0] if "." in request_type else request_type
                 if module_name not in cost_by_module:
-                    cost_by_module[module_name] = [0] * len(time_points)
+                    cost_by_module[module_name] = [0.0] * len(time_points)
                 cost_by_module[module_name][interval_index] += cost
 
         # 查询消息记录
         query_start_timestamp = start_time.timestamp()
-        for message in Messages.select().where(Messages.time >= query_start_timestamp):  # type: ignore
-            message_time_ts = message.time
+        messages = fetch_messages_since(start_time)
+        for message in messages:
+            message_time_ts = message.timestamp.timestamp()
 
             # 找到对应的时间间隔索引
             time_diff = message_time_ts - query_start_timestamp
@@ -1585,8 +2263,8 @@ class StatisticOutputTask(AsyncTask):
             if 0 <= interval_index < len(time_points):
                 # 确定聊天流名称
                 chat_name = None
-                if message.chat_info_group_id:
-                    chat_name = message.chat_info_group_name or f"群{message.chat_info_group_id}"
+                if message.group_id:
+                    chat_name = message.group_name or f"群{message.group_id}"
                 elif message.user_id:
                     chat_name = message.user_nickname or f"用户{message.user_id}"
                 else:
@@ -1608,34 +2286,37 @@ class StatisticOutputTask(AsyncTask):
             "message_by_chat": message_by_chat,
         }
 
-    def _generate_chart_tab(self, chart_data: dict) -> str:
+    def _generate_chart_tab(self, chart_data: dict[str, dict[str, object]]) -> str:
         # sourcery skip: extract-duplicate-method, move-assign-in-block
         """生成图表选项卡HTML内容"""
 
         # 生成不同颜色的调色板
         colors = [
-            "#8b5cf6",
-            "#9f8efb",
-            "#b5a6ff",
-            "#c7bbff",
-            "#d9ceff",
-            "#a78bfa",
-            "#9073d8",
-            "#bfaefc",
-            "#cabdfd",
-            "#e6e0ff",
+            "#b35b34",
+            "#0d4b50",
+            "#cfa54b",
+            "#6f665b",
+            "#dfc79a",
+            "#8f4b38",
+            "#74825a",
+            "#854f46",
+            "#2f5f62",
+            "#b98556",
         ]
 
         # 默认使用24小时数据生成数据集
-        default_data = chart_data["24h"]
+        default_data = cast(dict[str, object], chart_data["24h"])
+        cost_by_model = cast(dict[str, list[float]], default_data.get("cost_by_model", {}))
+        cost_by_module = cast(dict[str, list[float]], default_data.get("cost_by_module", {}))
+        message_by_chat = cast(dict[str, list[int]], default_data.get("message_by_chat", {}))
 
         # 为每个模型生成数据集
         model_datasets = []
-        for i, (model_name, cost_data) in enumerate(default_data["cost_by_model"].items()):
+        for i, (model_name, cost_data) in enumerate(cost_by_model.items()):
             color = colors[i % len(colors)]
             model_datasets.append(f"""{{
-                label: '{model_name}',
-                data: {cost_data},
+                label: {_json_for_html_script(str(model_name))},
+                data: {_json_for_html_script(cost_data)},
                 borderColor: '{color}',
                 backgroundColor: '{color}20',
                 tension: 0.4,
@@ -1646,11 +2327,11 @@ class StatisticOutputTask(AsyncTask):
 
         # 为每个模块生成数据集
         module_datasets = []
-        for i, (module_name, cost_data) in enumerate(default_data["cost_by_module"].items()):
+        for i, (module_name, cost_data) in enumerate(cost_by_module.items()):
             color = colors[i % len(colors)]
             module_datasets.append(f"""{{
-                label: '{module_name}',
-                data: {cost_data},
+                label: {_json_for_html_script(str(module_name))},
+                data: {_json_for_html_script(cost_data)},
                 borderColor: '{color}',
                 backgroundColor: '{color}20',
                 tension: 0.4,
@@ -1661,11 +2342,11 @@ class StatisticOutputTask(AsyncTask):
 
         # 为每个聊天流生成消息数据集
         message_datasets = []
-        for i, (chat_name, message_data) in enumerate(default_data["message_by_chat"].items()):
+        for i, (chat_name, message_data) in enumerate(message_by_chat.items()):
             color = colors[i % len(colors)]
             message_datasets.append(f"""{{
-                label: '{chat_name}',
-                data: {message_data},
+                label: {_json_for_html_script(str(chat_name))},
+                data: {_json_for_html_script(message_data)},
                 borderColor: '{color}',
                 backgroundColor: '{color}20',
                 tension: 0.4,
@@ -1704,25 +2385,25 @@ class StatisticOutputTask(AsyncTask):
             
             <style>
                 .time-range-btn {{
-                    background-color: #ecf0f1;
-                    border: 1px solid #bdc3c7;
-                    color: #2c3e50;
+                    background-color: var(--statistics-card);
+                    border: 1px solid var(--statistics-border);
+                    color: var(--statistics-foreground);
                     padding: 8px 16px;
                     margin: 0 5px;
-                    border-radius: 4px;
+                    border-radius: 3px;
                     cursor: pointer;
                     font-size: 14px;
                     transition: all 0.3s ease;
                 }}
                 
                 .time-range-btn:hover {{
-                    background-color: #d5dbdb;
+                    background-color: var(--statistics-accent);
                 }}
                 
                 .time-range-btn.active {{
-                    background-color: #3498db;
-                    color: white;
-                    border-color: #2980b9;
+                    background-color: var(--statistics-primary);
+                    color: var(--statistics-primary-foreground);
+                    border-color: var(--statistics-ring);
                 }}
             </style>
             
@@ -1805,7 +2486,7 @@ class StatisticOutputTask(AsyncTask):
                 
                 function createChart(chartType, data, timeRange) {{
                     const config = chartConfigs[chartType];
-                    const colors = ['#8b5cf6', '#9f8efb', '#b5a6ff', '#c7bbff', '#d9ceff', '#a78bfa', '#9073d8', '#bfaefc', '#cabdfd', '#e6e0ff'];
+                    const colors = ['#b35b34', '#0d4b50', '#cfa54b', '#6f665b', '#dfc79a', '#8f4b38', '#74825a', '#854f46', '#2f5f62', '#b98556'];
                     
                     let datasets = [];
                     
@@ -1814,7 +2495,7 @@ class StatisticOutputTask(AsyncTask):
                             label: config.title,
                             data: data[config.dataKey],
                             borderColor: colors[0],
-                            backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                            backgroundColor: 'rgba(179, 91, 52, 0.12)',
                             tension: 0.4,
                             fill: config.fill
                         }}];
@@ -1886,7 +2567,7 @@ class StatisticOutputTask(AsyncTask):
         </div>
         """
 
-    def _generate_metrics_data(self, now: datetime) -> dict:
+    def _generate_metrics_data(self, now: datetime) -> dict[str, object]:
         """生成指标趋势数据"""
         metrics_data = {}
 
@@ -1901,7 +2582,7 @@ class StatisticOutputTask(AsyncTask):
 
         return metrics_data
 
-    def _collect_metrics_interval_data(self, now: datetime, hours: int, interval_hours: int) -> dict:
+    def _collect_metrics_interval_data(self, now: datetime, hours: int, interval_hours: int) -> dict[str, object]:
         """收集指定时间范围内每个间隔的指标数据"""
         start_time = now - timedelta(hours=hours)
         time_points = []
@@ -1925,28 +2606,24 @@ class StatisticOutputTask(AsyncTask):
         total_replies = [0] * len(time_points)
         total_online_hours = [0.0] * len(time_points)
 
-        # 获取bot的QQ账号
-        bot_qq_account = (
-            str(global_config.bot.qq_account)
-            if hasattr(global_config, "bot") and hasattr(global_config.bot, "qq_account")
-            else ""
-        )
+        from src.chat.utils.utils import is_bot_self
 
         interval_seconds = interval_hours * 3600
 
         # 查询LLM使用记录
         query_start_time = start_time
-        for record in LLMUsage.select().where(LLMUsage.timestamp >= query_start_time):  # type: ignore
-            record_time = record.timestamp
+        records = fetch_model_usage_since(query_start_time)
+        for record in records:
+            record_time = cast(datetime, record["timestamp"])
 
             # 找到对应的时间间隔索引
             time_diff = (record_time - start_time).total_seconds()
             interval_index = int(time_diff // interval_seconds)
 
             if 0 <= interval_index < len(time_points):
-                cost = record.cost or 0.0
-                prompt_tokens = record.prompt_tokens or 0
-                completion_tokens = record.completion_tokens or 0
+                cost = cast(float | None, record["cost"]) or 0.0
+                prompt_tokens = cast(int | None, record["prompt_tokens"]) or 0
+                completion_tokens = cast(int | None, record["completion_tokens"]) or 0
                 total_token = prompt_tokens + completion_tokens
 
                 total_costs[interval_index] += cost
@@ -1954,8 +2631,9 @@ class StatisticOutputTask(AsyncTask):
 
         # 查询消息记录
         query_start_timestamp = start_time.timestamp()
-        for message in Messages.select().where(Messages.time >= query_start_timestamp):  # type: ignore
-            message_time_ts = message.time
+        messages = fetch_messages_since(start_time)
+        for message in messages:
+            message_time_ts = message.timestamp.timestamp()
 
             time_diff = message_time_ts - query_start_timestamp
             interval_index = int(time_diff // interval_seconds)
@@ -1963,14 +2641,12 @@ class StatisticOutputTask(AsyncTask):
             if 0 <= interval_index < len(time_points):
                 total_messages[interval_index] += 1
                 # 检查是否是bot发送的消息（回复）
-                if bot_qq_account and message.user_id == bot_qq_account:
+                if is_bot_self(message.platform or "", message.user_id or ""):
                     total_replies[interval_index] += 1
 
         # 查询在线时间记录
-        for record in OnlineTime.select().where(OnlineTime.end_timestamp >= start_time):  # type: ignore
-            record_start = record.start_timestamp
-            record_end = record.end_timestamp
-
+        records = fetch_online_time_since(start_time)
+        for record_start, record_end in records:
             # 找到记录覆盖的所有时间间隔
             for idx, time_point in enumerate(time_points):
                 interval_start = time_point
@@ -2016,13 +2692,13 @@ class StatisticOutputTask(AsyncTask):
             "cost_per_100_replies": cost_per_100_replies,
         }
 
-    def _generate_metrics_tab(self, metrics_data: dict) -> str:
+    def _generate_metrics_tab(self, metrics_data: dict[str, object]) -> str:
         """生成指标趋势图表选项卡HTML内容"""
         colors = {
-            "cost_per_100_messages": "#8b5cf6",
-            "cost_per_hour": "#9f8efb",
-            "tokens_per_hour": "#c7bbff",
-            "cost_per_100_replies": "#d9ceff",
+            "cost_per_100_messages": "#b35b34",
+            "cost_per_hour": "#0d4b50",
+            "tokens_per_hour": "#cfa54b",
+            "cost_per_100_replies": "#74825a",
         }
 
         return f"""
@@ -2054,25 +2730,25 @@ class StatisticOutputTask(AsyncTask):
             
             <style>
                 .time-scale-btn {{
-                    background-color: #ecf0f1;
-                    border: 1px solid #bdc3c7;
-                    color: #2c3e50;
+                    background-color: var(--statistics-card);
+                    border: 1px solid var(--statistics-border);
+                    color: var(--statistics-foreground);
                     padding: 8px 16px;
                     margin: 0 5px;
-                    border-radius: 4px;
+                    border-radius: 3px;
                     cursor: pointer;
                     font-size: 14px;
                     transition: all 0.3s ease;
                 }}
                 
                 .time-scale-btn:hover {{
-                    background-color: #d5dbdb;
+                    background-color: var(--statistics-accent);
                 }}
                 
                 .time-scale-btn.active {{
-                    background-color: #8b5cf6;
-                    color: white;
-                    border-color: #7c6bcf;
+                    background-color: var(--statistics-primary);
+                    color: var(--statistics-primary-foreground);
+                    border-color: var(--statistics-ring);
                 }}
             </style>
             
@@ -2204,15 +2880,20 @@ class StatisticOutputTask(AsyncTask):
 class AsyncStatisticOutputTask(AsyncTask):
     """完全异步的统计输出任务 - 更高性能版本"""
 
-    def __init__(self, record_file_path: str = "maibot_statistics.html"):
-        # 延迟0秒启动，运行间隔300秒
-        super().__init__(task_name="Async Statistics Data Output Task", wait_before_start=0, run_interval=300)
+    def __init__(self, record_file_path: str | None = None):
+        # 启动后立即运行，之后每15分钟输出一次统计数据
+        super().__init__(
+            task_name="Async Statistics Data Output Task",
+            wait_before_start=0,
+            run_interval=StatisticOutputTask.RUN_INTERVAL_SECONDS,
+        )
 
         # 直接复用 StatisticOutputTask 的初始化逻辑
         temp_stat_task = StatisticOutputTask(record_file_path)
         self.name_mapping = temp_stat_task.name_mapping
         self.record_file_path = temp_stat_task.record_file_path
         self.stat_period = temp_stat_task.stat_period
+        self._statistic_task = temp_stat_task
 
     async def run(self):
         """完全异步执行统计任务"""
@@ -2226,17 +2907,17 @@ class AsyncStatisticOutputTask(AsyncTask):
                     logger.info("正在后台收集统计数据...")
 
                     # 数据收集任务
-                    collect_task = asyncio.create_task(
-                        loop.run_in_executor(executor, self._collect_all_statistics, now)  # type: ignore
-                    )
-
-                    stats = await collect_task
+                    stats = await loop.run_in_executor(executor, self._statistic_task._collect_all_statistics, now)
+                    try:
+                        await refresh_dashboard_statistics_cache()
+                    except Exception as e:
+                        logger.warning(f"刷新 WebUI 统计缓存失败，将继续生成 HTML 报告: {e}")
                     logger.info("统计数据收集完成")
 
                     # 创建并发的输出任务
                     output_tasks = [
-                        asyncio.create_task(loop.run_in_executor(executor, self._statistic_console_output, stats, now)),  # type: ignore
-                        asyncio.create_task(loop.run_in_executor(executor, self._generate_html_report, stats, now)),  # type: ignore
+                        loop.run_in_executor(executor, self._statistic_task._statistic_console_output, stats, now),
+                        loop.run_in_executor(executor, self._statistic_task._generate_html_report, stats, now),
                     ]
 
                     # 等待所有输出任务完成
@@ -2248,60 +2929,3 @@ class AsyncStatisticOutputTask(AsyncTask):
 
         # 创建后台任务，立即返回
         asyncio.create_task(_async_collect_and_output())
-
-    # 复用 StatisticOutputTask 的所有方法
-    def _collect_all_statistics(self, now: datetime):
-        return StatisticOutputTask._collect_all_statistics(self, now)  # type: ignore
-
-    def _statistic_console_output(self, stats: Dict[str, Any], now: datetime):
-        return StatisticOutputTask._statistic_console_output(self, stats, now)  # type: ignore
-
-    def _generate_html_report(self, stats: dict[str, Any], now: datetime):
-        return StatisticOutputTask._generate_html_report(self, stats, now)  # type: ignore
-
-    # 其他需要的方法也可以类似复用...
-    @staticmethod
-    def _collect_model_request_for_period(collect_period: List[Tuple[str, datetime]]) -> Dict[str, Any]:
-        return StatisticOutputTask._collect_model_request_for_period(collect_period)
-
-    @staticmethod
-    def _collect_online_time_for_period(collect_period: List[Tuple[str, datetime]], now: datetime) -> Dict[str, Any]:
-        return StatisticOutputTask._collect_online_time_for_period(collect_period, now)
-
-    def _collect_message_count_for_period(self, collect_period: List[Tuple[str, datetime]]) -> Dict[str, Any]:
-        return StatisticOutputTask._collect_message_count_for_period(self, collect_period)  # type: ignore
-
-    @staticmethod
-    def _format_total_stat(stats: Dict[str, Any]) -> str:
-        return StatisticOutputTask._format_total_stat(stats)
-
-    @staticmethod
-    def _format_model_classified_stat(stats: Dict[str, Any]) -> str:
-        return StatisticOutputTask._format_model_classified_stat(stats)
-
-    def _format_chat_stat(self, stats: Dict[str, Any]) -> str:
-        return StatisticOutputTask._format_chat_stat(self, stats)  # type: ignore
-
-    def _generate_chart_data(self, stat: dict[str, Any]) -> dict:
-        return StatisticOutputTask._generate_chart_data(self, stat)  # type: ignore
-
-    def _collect_interval_data(self, now: datetime, hours: int, interval_minutes: int) -> dict:
-        return StatisticOutputTask._collect_interval_data(self, now, hours, interval_minutes)  # type: ignore
-
-    def _generate_chart_tab(self, chart_data: dict) -> str:
-        return StatisticOutputTask._generate_chart_tab(self, chart_data)  # type: ignore
-
-    def _generate_metrics_data(self, now: datetime) -> dict:
-        return StatisticOutputTask._generate_metrics_data(self, now)  # type: ignore
-
-    def _collect_metrics_interval_data(self, now: datetime, hours: int, interval_hours: int) -> dict:
-        return StatisticOutputTask._collect_metrics_interval_data(self, now, hours, interval_hours)  # type: ignore
-
-    def _generate_metrics_tab(self, metrics_data: dict) -> str:
-        return StatisticOutputTask._generate_metrics_tab(self, metrics_data)  # type: ignore
-
-    def _get_chat_display_name_from_id(self, chat_id: str) -> str:
-        return StatisticOutputTask._get_chat_display_name_from_id(self, chat_id)  # type: ignore
-
-    def _convert_defaultdict_to_dict(self, data):
-        return StatisticOutputTask._convert_defaultdict_to_dict(self, data)  # type: ignore
